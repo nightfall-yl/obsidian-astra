@@ -781,8 +781,15 @@ export const getOnedriveClient = (
 };
 
 /**
- * Use delta api to list all files and folders
- * https://docs.microsoft.com/en-us/onedrive/developer/rest-api/api/driveitem_delta?view=odsp-graph-online
+ * Use OneDrive delta API to list all files and folders.
+ * https://learn.microsoft.com/en-us/onedrive/developer/rest-api/api/driveitem_delta
+ *
+ * 两种模式：
+ *   1. 全量枚举（首次 / deltaLink 已过期）：打起始端点 /delta?$top=200，分页拉全量，
+ *      存快照和 deltaLink，返回完整 Contents
+ *   2. Delta 续传（deltaLink + 快照都存在）：直接用存的 deltaLink URL，拿到增量变化
+ *      后合并到本地快照（新增/修改 upsert，删除移除），返回合并后的完整 Contents。
+ *      任何网络错误或 410 Gone 都会回退到全量枚举（同时清空 deltaLink + 快照）
  */
 export const listFromRemote = async (
   client: WrappedOnedriveClient,
@@ -796,41 +803,103 @@ export const listFromRemote = async (
   const NEXT_LINK_KEY = "@odata.nextLink";
   const DELTA_LINK_KEY = "@odata.deltaLink";
 
-  let res = await client.getJson(
-    `/drive/special/approot:/${client.remoteBaseDir}:/delta`
-  );
-  const firstValue: unknown = res.value;
-  const driveItems: GraphDriveItem[] = [...((firstValue ?? []) as GraphDriveItem[])];
+  const tryDeltaResume =
+    !!client.onedriveConfig.deltaLink &&
+    !!client.onedriveConfig.remoteSnapshot &&
+    Object.keys(client.onedriveConfig.remoteSnapshot).length > 0;
 
-  while (NEXT_LINK_KEY in res) {
-    res = await client.getJson(res[NEXT_LINK_KEY] as string);
-    const nextValue: unknown = res.value;
-    driveItems.push(...((nextValue ?? []) as GraphDriveItem[]));
+  let items: GraphDriveItem[] = [];
+  let newDeltaLink = "";
+  let usedFullEnumeration = false;
+
+  const fetchAllPages = async (startUrl: string) => {
+    const collected: GraphDriveItem[] = [];
+    let res = await client.getJson(startUrl);
+    collected.push(...((res.value ?? []) as GraphDriveItem[]));
+    while (NEXT_LINK_KEY in res) {
+      res = await client.getJson(res[NEXT_LINK_KEY] as string);
+      collected.push(...((res.value ?? []) as GraphDriveItem[]));
+    }
+    if (DELTA_LINK_KEY in res) {
+      newDeltaLink = res[DELTA_LINK_KEY] as string;
+    }
+    return collected;
+  };
+
+  if (tryDeltaResume) {
+    try {
+      items = await fetchAllPages(client.onedriveConfig.deltaLink);
+    } catch (err) {
+      // deltaLink 过期或远端不可用 → 回退全量枚举
+      syncLog.warn(
+        `deltaLink 续传失败，回退全量枚举：${err instanceof Error ? err.message : String(err)}`
+      );
+      client.onedriveConfig.deltaLink = "";
+      client.onedriveConfig.remoteSnapshot = undefined;
+      await client.saveUpdatedConfigFunc();
+      usedFullEnumeration = true;
+    }
+  } else {
+    usedFullEnumeration = true;
   }
 
-  // lastly we should have delta link?
-  if (DELTA_LINK_KEY in res) {
-    client.onedriveConfig.deltaLink = res[DELTA_LINK_KEY] as string;
-    await client.saveUpdatedConfigFunc();
+  if (usedFullEnumeration) {
+    const startUrl = `/drive/special/approot:/${client.remoteBaseDir}:/delta?$top=200`;
+    items = await fetchAllPages(startUrl);
   }
 
-  // unify everything to RemoteItem
-  const unifiedContents: RemoteItem[] = [];
-  for (const item of driveItems) {
-    if ((item as Record<string, unknown>).deleted !== undefined) {
+  // ── 构建变更集（区分普通项和已删项） ──
+  type DeltaEntry = { item: GraphDriveItem; deleted: boolean };
+  const entries: DeltaEntry[] = items.map((item) => ({
+    item,
+    deleted: (item as Record<string, unknown>).deleted !== undefined,
+  }));
+
+  // ── 合并到快照 ──
+  let snapshot: Record<string, RemoteItem> =
+    client.onedriveConfig.remoteSnapshot ?? {};
+
+  for (const entry of entries) {
+    // 已删项：从快照中移除（即使 fromDriveItemToRemoteItem 失败也不影响删除判断）
+    if (entry.deleted) {
+      const name = entry.item.name;
+      const parentPath = entry.item.parentReference?.path;
+      if (name !== undefined && parentPath !== undefined) {
+        try {
+          const deletedItem = fromDriveItemToRemoteItem(
+            entry.item,
+            client.remoteBaseDir
+          );
+          if (deletedItem.key !== "/") {
+            delete snapshot[deletedItem.key];
+          }
+        } catch {
+          // 元数据不完整：尝试按路径后缀在快照里反查
+          for (const key of Object.keys(snapshot)) {
+            if (key.endsWith(`/${name}`) || key === `/${name}`) {
+              delete snapshot[key];
+              break;
+            }
+          }
+        }
+      }
       continue;
     }
+
     try {
-      const normalized = fromDriveItemToRemoteItem(item, client.remoteBaseDir);
-      if (normalized.key !== "/") {
-        unifiedContents.push(normalized);
+      const remoteItem = fromDriveItemToRemoteItem(
+        entry.item,
+        client.remoteBaseDir
+      );
+      if (remoteItem.key !== "/") {
+        snapshot[remoteItem.key] = remoteItem;
       }
     } catch (err) {
       syncLog.warn(
         `skip unrecognized onedrive item while listing remote: ${JSON.stringify(
           {
-            name: item?.name,
-            parentPath: item?.parentReference?.path,
+            name: entry.item?.name,
+            parentPath: entry.item?.parentReference?.path,
           }
         )}`,
         err
@@ -838,8 +907,17 @@ export const listFromRemote = async (
     }
   }
 
+  // ── 持久化 deltaLink + 快照 ──
+  if (newDeltaLink) {
+    client.onedriveConfig.deltaLink = newDeltaLink;
+  }
+  // 只有全量枚举才重置快照；delta 续传是在已有快照上增量合并
+  client.onedriveConfig.remoteSnapshot = snapshot;
+  await client.saveUpdatedConfigFunc();
+
+  // ── 返回完整 Contents ──
   return {
-    Contents: unifiedContents,
+    Contents: Object.values(snapshot),
   };
 };
 

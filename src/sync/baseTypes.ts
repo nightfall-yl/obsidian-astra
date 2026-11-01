@@ -15,6 +15,9 @@ export interface OnedriveConfig {
   accessTokenExpiresInSeconds: number;
   accessTokenExpiresAtTime: number;
   deltaLink: string;
+  /** 上次成功同步时的远端完整快照（key → RemoteItem）。用于 delta 续传时合并增量变化，
+   *  避免每次全量枚举。delta 条目标记为 deleted 的项会从快照中移除。 */
+  remoteSnapshot?: Record<string, RemoteItem>;
   username: string;
   credentialsShouldBeDeletedAtTime?: number;
   remoteBaseDir?: string;

@@ -157,6 +157,8 @@ export interface AstraSettings {
   homeModuleOrder: string[];
   /** 移动端隐藏的模块 id 列表（桌面端不受影响） */
   mobileHiddenModules: string[];
+  /** 移动端组件设置项显隐开关：默认关闭（收起）；打开后显示下方所有 mobileHiddenModules 勾选项 */
+  mobileShowSettings: boolean;
   /** 全文搜索（迁移自 omnisearch User Interface 组，剔除嵌入引用项） */
   search: SearchSettings;
   /** Vault Sync（OneDrive 同步） */
@@ -484,6 +486,7 @@ export const DEFAULT_SETTINGS: AstraSettings = {
   moduleSizes: {},
   homeModuleOrder: ["qc", "dailyPhrase", "todo", "weekly", "projects", "countdown"],
   mobileHiddenModules: ["todo", "weekly", "projects", "countdown"],
+  mobileShowSettings: false,
   search: DEFAULT_SEARCH_SETTINGS,
   sync: DEFAULT_SYNC_SETTINGS
 };

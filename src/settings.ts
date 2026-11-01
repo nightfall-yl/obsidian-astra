@@ -295,23 +295,6 @@ function renderSettings(
 
   generalGroup.addSetting((setting) => {
     setting
-      .setName($t("p4.10065"))
-      .setDesc($t("p4.10066"))
-      .addText((text) =>
-        text
-          .setPlaceholder($t("p4.10067"))
-          .setValue(plugin.data.settings.displayName)
-          .onChange((value) => {
-            void (async () => {
-              plugin.data.settings.displayName = value.trim();
-              await plugin.saveSettings();
-            })();
-          })
-      );
-  });
-
-  generalGroup.addSetting((setting) => {
-    setting
       .setName($t("p4.10068"))
       .setDesc($t("p4.10069"))
       .addToggle((toggle) =>
@@ -338,6 +321,23 @@ function renderSettings(
           .onChange((value) => {
             void (async () => {
               plugin.data.settings.startupMode = value as StartupMode;
+              await plugin.saveSettings();
+            })();
+          })
+      );
+  });
+
+  generalGroup.addSetting((setting) => {
+    setting
+      .setName($t("p4.10065"))
+      .setDesc($t("p4.10066"))
+      .addText((text) =>
+        text
+          .setPlaceholder($t("p4.10067"))
+          .setValue(plugin.data.settings.displayName)
+          .onChange((value) => {
+            void (async () => {
+              plugin.data.settings.displayName = value.trim();
               await plugin.saveSettings();
             })();
           })
@@ -539,10 +539,33 @@ function renderSettings(
       );
   });
 
-  // ── 移动端模块显隐 ──
+  // ── 移动端组件 ──
+  // 「显示设置项」开关：与 Minimal 主题同语义——开关常显，打开后下方 mobileHiddenModules
+  // 勾选项才出现；关闭时收起，仅保留开关本身。默认关闭。
+  const mobileSettingEls: HTMLElement[] = [];
+  const applyMobileVisibility = (): void => {
+    const show = plugin.data.settings.mobileShowSettings === true;
+    for (const el of mobileSettingEls) {
+      el.style.display = show ? "" : "none";
+    }
+  };
+
   const mobileGroup = new SettingGroup(dashboardEl).setHeading($t("p4.10095"));
   mobileGroup.addSetting((setting) => {
-    setting.setDesc($t("p4.10096"));
+    setting
+      .setName($t("p4.10261"))
+      .setDesc($t("p4.10264"))
+      .addToggle((toggle) => {
+        toggle
+          .setValue(plugin.data.settings.mobileShowSettings)
+          .onChange((show) => {
+            void (async () => {
+              plugin.data.settings.mobileShowSettings = show;
+              await plugin.saveSettings();
+              applyMobileVisibility();
+            })();
+          });
+      });
   });
 
   const moduleLabels: Record<string, string> = {
@@ -558,6 +581,7 @@ function renderSettings(
     mobileGroup.addSetting((setting) => {
       setting
         .setName(moduleLabels[id]!)
+        .setDesc($t("p4.10265"))
         .addToggle((toggle) => {
           const hidden = plugin.data.settings.mobileHiddenModules;
           toggle.setValue(!hidden.includes(id));
@@ -574,8 +598,11 @@ function renderSettings(
             })();
           });
         });
+      mobileSettingEls.push(setting.settingEl);
     });
   }
+  // 初始态：所有 setting 创建完成后统一应用
+  applyMobileVisibility();
 
   // ── Minimal 主题（移植自 obsidian-minimal-settings，独立 JSON 存储） ──
   renderMinimalSettings(dashboardEl, plugin);
@@ -583,10 +610,27 @@ function renderSettings(
   // ===================== Markdown+ =====================
   const markdownEl = sectionEls.get("markdown")!;
 
-  // ── 视图模式（存储于 Section2 的 static-data.json，经 StaticStore） ──
+  // ── 视图（存储于 Section2 的 static-data.json，经 StaticStore） ──
   const store = plugin.section2Store;
   const fv = store.settings.forceViewMode;
   const forceViewGroup = new SettingGroup(markdownEl).setHeading($t("p4.10103"));
+
+  // 启用光标位置（组内第 1）
+  forceViewGroup.addSetting((setting) => {
+    setting
+      .setName($t("p4.10110"))
+      .setDesc($t("p4.10111"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(plugin.data.settings.cursorPosition.enabled)
+          .onChange((value) => {
+            void (async () => {
+              plugin.data.settings.cursorPosition.enabled = value;
+              await plugin.saveSettings();
+            })();
+          })
+      );
+  });
 
   forceViewGroup.addSetting((setting) => {
     setting
@@ -631,22 +675,6 @@ function renderSettings(
             void (async () => {
               fv.ignoreForceViewAll = value;
               await store.save();
-            })();
-          })
-      );
-  });
-
-  forceViewGroup.addSetting((setting) => {
-    setting
-      .setName($t("p4.10110"))
-      .setDesc($t("p4.10111"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(plugin.data.settings.cursorPosition.enabled)
-          .onChange((value) => {
-            void (async () => {
-              plugin.data.settings.cursorPosition.enabled = value;
-              await plugin.saveSettings();
             })();
           })
       );
@@ -858,21 +886,15 @@ function renderSearchSettings(searchEl: HTMLElement, plugin: AstraDashboardPlugi
   });
   group.addSetting((setting) => {
     setting
-      .setName($t("search.set.simple.name"))
-      .setDesc($t("search.set.simple.desc"))
-      .addToggle((toggle) => toggle.setValue(s.simpleSearch).onChange(toggleSetter("simpleSearch")));
+      .setName($t("search.set.highlight.name"))
+      .setDesc($t("search.set.highlight.desc"))
+      .addToggle((toggle) => toggle.setValue(s.highlight).onChange(toggleSetter("highlight")));
   });
   group.addSetting((setting) => {
     setting
       .setName($t("search.set.excerpt.name"))
       .setDesc($t("search.set.excerpt.desc"))
       .addToggle((toggle) => toggle.setValue(s.showExcerpt).onChange(toggleSetter("showExcerpt")));
-  });
-  group.addSetting((setting) => {
-    setting
-      .setName($t("search.set.highlight.name"))
-      .setDesc($t("search.set.highlight.desc"))
-      .addToggle((toggle) => toggle.setValue(s.highlight).onChange(toggleSetter("highlight")));
   });
   group.addSetting((setting) => {
     setting
@@ -885,6 +907,12 @@ function renderSearchSettings(searchEl: HTMLElement, plugin: AstraDashboardPlugi
       .setName($t("search.set.scrollToMatch.name"))
       .setDesc($t("search.set.scrollToMatch.desc"))
       .addToggle((toggle) => toggle.setValue(s.scrollToMatch).onChange(toggleSetter("scrollToMatch")));
+  });
+  group.addSetting((setting) => {
+    setting
+      .setName($t("search.set.simple.name"))
+      .setDesc($t("search.set.simple.desc"))
+      .addToggle((toggle) => toggle.setValue(s.simpleSearch).onChange(toggleSetter("simpleSearch")));
   });
   group.addSetting((setting) => {
     setting
@@ -1023,7 +1051,7 @@ function renderSyncSettings(
   // 设置页关闭时在 AstraSettingTab.hide() 中解除注册
   syncManager.registerSettingsRerender(rerender);
 
-  // ── 服务与状态（上游「OneDrive（个人版）（App Folder）设置」）──
+  // ── 账户（上游「OneDrive（个人版）（App Folder）设置」）──
   const statusGroup = new SettingGroup(syncEl).setHeading(
     $t("settings_onedrive")
   );
@@ -1095,7 +1123,7 @@ function renderSyncSettings(
       );
   });
 
-  // ── 基本设置 ──
+  // ── 通用 ──
   const basicGroup = new SettingGroup(syncEl).setHeading($t("settings_basic"));
 
   // 密码（上游语义：空 = 不加密；确认修改走 PasswordModal）
@@ -1251,10 +1279,25 @@ function renderSyncSettings(
       );
   });
 
-  // ── 同步内容 ──
+  // ── 同步 ──
   const whatGroup = new SettingGroup(syncEl).setHeading(
     $t("settings_basic_what")
   );
+
+  // 同步 _ 开头文件（组内第 1）
+  whatGroup.addSetting((setting) => {
+    setting
+      .setName($t("settings_syncunderscore"))
+      .setDesc($t("settings_syncunderscore_desc"))
+      .addToggle((toggle) =>
+        toggle.setValue(s.syncUnderscoreItems).onChange((value) => {
+          void (async () => {
+            s.syncUnderscoreItems = value;
+            await plugin.saveSettings();
+          })();
+        })
+      );
+  });
 
   // 同步 .trash
   whatGroup.addSetting((setting) => {
@@ -1280,21 +1323,6 @@ function renderSyncSettings(
         toggle.setValue(s.syncBookmarks).onChange((value) => {
           void (async () => {
             s.syncBookmarks = value;
-            await plugin.saveSettings();
-          })();
-        })
-      );
-  });
-
-  // 同步 _ 开头文件
-  whatGroup.addSetting((setting) => {
-    setting
-      .setName($t("settings_syncunderscore"))
-      .setDesc($t("settings_syncunderscore_desc"))
-      .addToggle((toggle) =>
-        toggle.setValue(s.syncUnderscoreItems).onChange((value) => {
-          void (async () => {
-            s.syncUnderscoreItems = value;
             await plugin.saveSettings();
           })();
         })
@@ -1329,7 +1357,7 @@ function renderSyncSettings(
       );
   });
 
-  // ── 进阶设置 ──
+  // ── 高级 ──
   const advGroup = new SettingGroup(syncEl).setHeading($t("settings_adv"));
 
   // 跳过大文件
@@ -1525,14 +1553,14 @@ function renderMinimalSettings(
 
   colorGroup.addSetting((setting) => {
     setting
-      .setName($t("p4.10124"))
-      .setDesc($t("p4.10125"))
+      .setName($t("p4.10126"))
+      .setDesc($t("p4.10127"))
       .addToggle((toggle) =>
         toggle
-          .setValue(manager.settings.imgGrid)
+          .setValue(manager.settings.minimalStatus)
           .onChange((value) => {
             void (async () => {
-              manager.settings.imgGrid = value;
+              manager.settings.minimalStatus = value;
               await save();
               manager.refresh();
             })();
@@ -1542,14 +1570,14 @@ function renderMinimalSettings(
   });
   colorGroup.addSetting((setting) => {
     setting
-      .setName($t("p4.10126"))
-      .setDesc($t("p4.10127"))
+      .setName($t("p4.10124"))
+      .setDesc($t("p4.10125"))
       .addToggle((toggle) =>
         toggle
-          .setValue(manager.settings.minimalStatus)
+          .setValue(manager.settings.imgGrid)
           .onChange((value) => {
             void (async () => {
-              manager.settings.minimalStatus = value;
+              manager.settings.imgGrid = value;
               await save();
               manager.refresh();
             })();
