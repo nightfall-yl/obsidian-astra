@@ -98,10 +98,7 @@ export class SyncAutoScheduler {
       clearTimeout: (id: number) => void;
       setInterval?: (cb: () => void, ms: number) => number;
       clearInterval?: (id: number) => void;
-    } = globalThis as unknown as {
-      setTimeout: typeof globalThis.setTimeout;
-      clearTimeout: typeof globalThis.clearTimeout;
-    }
+    } = window
   ) {}
 
   /**
