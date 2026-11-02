@@ -430,10 +430,20 @@ export default class AstraDashboardPlugin extends Plugin {
       })
     );
 
+    // Obsidian 类型声明对 resolved 回调签名有误，运行时实际传 (file?: TFile)
+    const resolvedCb = (file: TFile | undefined): void => {
+      // 启动全量解析完成时 file 为 undefined，此时需要刷新；
+      // 单文件解析完成时只关心 .md，过滤 data.json 等插件数据变更。
+      if (
+        file !== undefined &&
+        (!(file instanceof TFile) || file.extension !== "md")
+      ) {
+        return;
+      }
+      this.refreshDashboardViews();
+    };
     this.registerEvent(
-      this.app.metadataCache.on("resolved", () => {
-        this.refreshDashboardViews();
-      })
+      this.app.metadataCache.on("resolved", resolvedCb as () => void)
     );
   }
 }

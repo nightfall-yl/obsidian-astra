@@ -153,6 +153,7 @@ function renderSettings(
   container.addClass("astra-settings-root");
 
   // Defensive: ensure new settings exist (in case data.json predates migration)
+  try {
   if (!plugin.data.settings.calendar) {
     plugin.data.settings.calendar = { ...DEFAULT_CALENDAR_SETTINGS };
   }
@@ -224,6 +225,10 @@ function renderSettings(
       (id) => !(mobileVisibleByDefault.includes(id) && order.includes(id))
     );
   }
+  } catch (err) {
+    // 防御性补全失败不应阻止后续渲染；已用 structuredClone 兜底（见 loadPluginData）
+    console.error("[Astra] Settings defensive completion failed", err);
+  }
 
   const sections: SettingsSection[] = [
     {
@@ -289,6 +294,7 @@ function renderSettings(
 
   // ===================== Dashboard =====================
   const dashboardEl = sectionEls.get("dashboard")!;
+  try {
 
   // ── 通用 ──
   const generalGroup = new SettingGroup(dashboardEl).setHeading($t("p4.10064"));
@@ -606,9 +612,14 @@ function renderSettings(
 
   // ── Minimal 主题（移植自 obsidian-minimal-settings，独立 JSON 存储） ──
   renderMinimalSettings(dashboardEl, plugin);
+  } catch (err) {
+    dashboardEl.createDiv({ text: $t("set.groupLoadFail"), cls: "astra-empty-state" });
+    console.error("[Astra] Settings tab 'dashboard' failed to render", err);
+  }
 
   // ===================== Markdown+ =====================
   const markdownEl = sectionEls.get("markdown")!;
+  try {
 
   // ── 视图（存储于 Section2 的 static-data.json，经 StaticStore） ──
   const store = plugin.section2Store;
@@ -836,14 +847,28 @@ function renderSettings(
 
   // ── Linter（移植自 obsidian-linter，独立 JSON 存储） ──
   renderLinterSettings(markdownEl, plugin);
+  } catch (err) {
+    markdownEl.createDiv({ text: $t("set.groupLoadFail"), cls: "astra-empty-state" });
+    console.error("[Astra] Settings tab 'markdown' failed to render", err);
+  }
 
   // ===================== Vault Search =====================
   const searchEl = sectionEls.get("search")!;
+  try {
   renderSearchSettings(searchEl, plugin);
+  } catch (err) {
+    searchEl.createDiv({ text: $t("set.groupLoadFail"), cls: "astra-empty-state" });
+    console.error("[Astra] Settings tab 'search' failed to render", err);
+  }
 
   // ===================== OneDrive Sync =====================
   const syncEl = sectionEls.get("sync")!;
+  try {
   renderSyncSettings(syncEl, plugin, () => renderSettings(container, plugin));
+  } catch (err) {
+    syncEl.createDiv({ text: $t("set.groupLoadFail"), cls: "astra-empty-state" });
+    console.error("[Astra] Settings tab 'sync' failed to render", err);
+  }
 
 }
 
@@ -1227,29 +1252,6 @@ function renderSyncSettings(
           .onChange((value) => {
             void (async () => {
               s.autoRunEveryMilliseconds = parseInt(value);
-              await plugin.saveSettings();
-              syncManager.applyEnabled();
-            })();
-          })
-      );
-  });
-
-  // 检测远端变更后同步延迟
-  basicGroup.addSetting((setting) => {
-    setting
-      .setName($t("settings_remoterun"))
-      .setDesc($t("settings_remoterun_desc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("-1", $t("settings_remoterun_notset"))
-          .addOption("1000", $t("settings_remoterun_1sec"))
-          .addOption("5000", $t("settings_remoterun_5sec"))
-          .addOption("10000", $t("settings_remoterun_10sec"))
-          .addOption("60000", $t("settings_remoterun_1min"))
-          .setValue(`${s.syncOnRemoteChangesAfterMilliseconds}`)
-          .onChange((value) => {
-            void (async () => {
-              s.syncOnRemoteChangesAfterMilliseconds = parseInt(value);
               await plugin.saveSettings();
               syncManager.applyEnabled();
             })();
@@ -1826,22 +1828,6 @@ function renderLinterSettings(
 
   linterGroup.addSetting((setting) => {
     setting
-      .setName($t("p4.10153"))
-      .setDesc($t("p4.10154"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(manager.settings.yamlTimestamp.convertToUTC)
-          .onChange((value) => {
-            void (async () => {
-              manager.settings.yamlTimestamp.convertToUTC = value;
-              await save();
-            })();
-          })
-      );
-  });
-
-  linterGroup.addSetting((setting) => {
-    setting
       .setName($t("p4.10155"))
       .setDesc($t("p4.10156"))
       .addToggle((toggle) =>
@@ -1850,6 +1836,22 @@ function renderLinterSettings(
           .onChange((value) => {
             void (async () => {
               manager.settings.twoSpaces.enabled = value;
+              await save();
+            })();
+          })
+      );
+  });
+
+  linterGroup.addSetting((setting) => {
+    setting
+      .setName($t("p4.10153"))
+      .setDesc($t("p4.10154"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(manager.settings.yamlTimestamp.convertToUTC)
+          .onChange((value) => {
+            void (async () => {
+              manager.settings.yamlTimestamp.convertToUTC = value;
               await save();
             })();
           })

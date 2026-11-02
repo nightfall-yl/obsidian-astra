@@ -1,7 +1,7 @@
 {
   "name": "astral-trek",
-  "version": "26.3.2",
-  "description": "An interactive home dashboard for tasks, knowledge graph, plugins, vault health, and writing activity.",
+  "version": "26.3.3",
+  "description": "All-in-one Obsidian workspace plugin: interactive dashboard, vault-wide full-text search (CJK-friendly), OneDrive vault sync, a lightweight Markdown linter, forced view mode, and Dataview-style `astra` query blocks.",
   "main": "main.js",
   "type": "module",
   "scripts": {

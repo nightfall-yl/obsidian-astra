@@ -907,13 +907,27 @@ export const listFromRemote = async (
     }
   }
 
-  // ── 持久化 deltaLink + 快照 ──
-  if (newDeltaLink) {
+  // ── 脏检查：只有 snapshot 或 deltaLink 真正变化时才持久化 ──
+  const oldSnapshot = client.onedriveConfig.remoteSnapshot ?? {};
+  const snapshotChanged =
+    Object.keys(oldSnapshot).length !== Object.keys(snapshot).length ||
+    Object.keys(snapshot).some(
+      (key) =>
+        JSON.stringify(oldSnapshot[key]) !== JSON.stringify(snapshot[key])
+    );
+  const deltaLinkChanged =
+    !!newDeltaLink && newDeltaLink !== client.onedriveConfig.deltaLink;
+
+  if (snapshotChanged) {
+    client.onedriveConfig.remoteSnapshot = snapshot;
+  }
+  if (deltaLinkChanged) {
     client.onedriveConfig.deltaLink = newDeltaLink;
   }
-  // 只有全量枚举才重置快照；delta 续传是在已有快照上增量合并
-  client.onedriveConfig.remoteSnapshot = snapshot;
-  await client.saveUpdatedConfigFunc();
+
+  if (snapshotChanged || deltaLinkChanged) {
+    await client.saveUpdatedConfigFunc();
+  }
 
   // ── 返回完整 Contents ──
   return {

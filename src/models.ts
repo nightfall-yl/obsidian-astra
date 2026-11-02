@@ -198,8 +198,6 @@ export interface OneDriveSyncSettings {
   initRunAfterMilliseconds: number;
   /** 保存笔记后防抖同步延迟（毫秒；-1 = 关闭） */
   syncOnSaveAfterMilliseconds: number;
-  /** 检测到远端变更后触发同步的延迟（毫秒；-1 = 关闭） */
-  syncOnRemoteChangesAfterMilliseconds: number;
   /** 上次成功同步时间戳（-1 = 尚未同步过） */
   lastSynced: number;
   /** 输出同步引擎调试日志 */
@@ -225,7 +223,6 @@ export const DEFAULT_SYNC_SETTINGS: OneDriveSyncSettings = {
   autoRunEveryMilliseconds: -1,
   initRunAfterMilliseconds: -1,
   syncOnSaveAfterMilliseconds: -1,
-  syncOnRemoteChangesAfterMilliseconds: -1,
   lastSynced: -1,
   debug: false,
 };
@@ -606,8 +603,6 @@ export function normalizeSyncSettings(
   merged.concurrency = 5;
   // 该保护已从设置页移除，固定为 100（去除保护，总是同步）
   merged.protectModifyPercentage = 100;
-  merged.syncOnRemoteChangesAfterMilliseconds =
-    saved?.syncOnRemoteChangesAfterMilliseconds ?? -1;
   return merged;
 }
 

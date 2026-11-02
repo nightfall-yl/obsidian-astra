@@ -1058,13 +1058,6 @@ export default {
   "settings_autorun_5min": "every 5 minutes",
   "settings_autorun_10min": "every 10 minutes",
   "settings_autorun_30min": "every 30 minutes",
-  "settings_remoterun": "Sync Delay After Remote Change Detected",
-  "settings_remoterun_desc": "How long to wait before triggering sync after remote changes are detected? No plugin restart required after setting.",
-  "settings_remoterun_notset": "(not set)",
-  "settings_remoterun_1sec": "after 1 second",
-  "settings_remoterun_5sec": "after 5 seconds",
-  "settings_remoterun_10sec": "after 10 seconds",
-  "settings_remoterun_1min": "after 1 minute",
   "settings_runoncestartup": "Run Once On Start Up Automatically",
   "settings_runoncestartup_desc": "This setting causes the sync to run once automatically at startup. Changes will take effect on the NEXT startup. This setting is different from the \"schedule for auto run\" setting, which initiates syncing after every specified interval.",
   "settings_runoncestartup_notset": "(not set)",
@@ -1120,5 +1113,6 @@ export default {
   "sync.error.passwordNotMatched": "Encryption password check failed ({reason}). Ensure all devices use the same password; if it was just changed, follow the settings hint to reset and re-sync",
   "sync.error.sizesGoWrong": "{count} file(s) exceed the size limit (e.g. {first}); skipped this run",
   "sync.error.protectModifyPercentage": "Sync aborted: too many files would be modified: {msg}",
-  "sync.error.syncFailed": "Sync failed: {msg}"
+  "sync.error.syncFailed": "Sync failed: {msg}",
+  "set.groupLoadFail": "This settings group failed to load. Try restarting the plugin."
 };

@@ -1060,13 +1060,6 @@ export default {
   "settings_autorun_5min": "每 5 分钟",
   "settings_autorun_10min": "每 10 分钟",
   "settings_autorun_30min": "每 30 分钟",
-  "settings_remoterun": "检测远端变更后同步延迟",
-  "settings_remoterun_desc": "检测到远端有变更后，延迟多久触发同步？设置后无需重启插件。",
-  "settings_remoterun_notset": "（不设置）",
-  "settings_remoterun_1sec": "1 秒后",
-  "settings_remoterun_5sec": "5 秒后",
-  "settings_remoterun_10sec": "10 秒后",
-  "settings_remoterun_1min": "1 分钟后",
   "settings_runoncestartup": "启动后自动运行一次",
   "settings_runoncestartup_desc": "本设置使得插件在程序启动后自动触发一次同步。修改后，会在下一次启动生效。本设置和\"自动运行\"是不同的，那个设置是指\"每隔一段时间\"都自动同步一次。",
   "settings_runoncestartup_notset": "（不设置）",
@@ -1123,5 +1116,6 @@ export default {
   "sync.error.passwordNotMatched": "加密口令校验未通过（{reason}）。请确认所有设备口令一致；若刚修改过口令，请按设置页提示重置后重新同步",
   "sync.error.sizesGoWrong": "有 {count} 个文件超过大小限制（如 {first}），本次已跳过同步",
   "sync.error.protectModifyPercentage": "本次同步将修改过多文件，已中止保护：{msg}",
-  "sync.error.syncFailed": "同步失败：{msg}"
+  "sync.error.syncFailed": "同步失败：{msg}",
+  "set.groupLoadFail": "该设置分组加载失败，请尝试重启插件。"
 };

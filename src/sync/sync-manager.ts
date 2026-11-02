@@ -151,8 +151,6 @@ export class SyncManager {
   private autoRunTimer: number | null = null;
   private initRunTimer: number | null = null;
   private onSaveTimer: number | null = null;
-  private remoteCheckTimer: number | null = null;
-  private lastRemoteMetadataMtime: number | null = null;
   /** 状态栏相对时间刷新定时器（对齐上游 30s interval） */
   private statusBarTimer: number | null = null;
   private statusBarItemEl: HTMLElement | null = null;
@@ -274,35 +272,7 @@ export class SyncManager {
         });
       }, s.autoRunEveryMilliseconds);
     }
-    if (s.syncOnRemoteChangesAfterMilliseconds > 0) {
-      this.lastRemoteMetadataMtime = null;
-      this.remoteCheckTimer = window.setInterval(() => {
-        void this.checkRemoteChanges().catch((err) => {
-          syncLog.error("remote change check failed", err);
-        });
-      }, s.syncOnRemoteChangesAfterMilliseconds);
-    }
     this.updateStatusBar();
-  }
-
-  /** 轮询远端文件列表的最新修改时间，检测到远端变化后触发一次同步 */
-  private async checkRemoteChanges(): Promise<void> {
-    if (this.syncing || !this.isAuthorized) {
-      return;
-    }
-    const rsp = await this.getClient().listFromRemote();
-    const remoteItems = rsp.Contents ?? [];
-    const latest = remoteItems.reduce(
-      (acc: number, x) => Math.max(acc, x.lastModified),
-      0
-    );
-    if (
-      this.lastRemoteMetadataMtime !== null &&
-      latest > this.lastRemoteMetadataMtime
-    ) {
-      await this.syncRun("auto");
-    }
-    this.lastRemoteMetadataMtime = latest;
   }
 
   /** 状态栏：空闲时显示上次成功同步的相对时间（对齐上游） */
@@ -338,10 +308,6 @@ export class SyncManager {
     if (this.onSaveTimer !== null) {
       window.clearTimeout(this.onSaveTimer);
       this.onSaveTimer = null;
-    }
-    if (this.remoteCheckTimer !== null) {
-      window.clearInterval(this.remoteCheckTimer);
-      this.remoteCheckTimer = null;
     }
     if (this.statusBarTimer !== null) {
       window.clearInterval(this.statusBarTimer);

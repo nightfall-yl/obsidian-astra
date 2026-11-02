@@ -4,6 +4,18 @@
 
 > 说明：本更新日志自 `26.1.1` 起维护。
 
+## [26.3.3] - 2026-11-02
+
+### 调整
+- **设置页分组渲染加异常隔离**：四个 tab（Astra / Markdown+ / Vault Search / Vault Sync）各自 try/catch，单个分组渲染失败不再牵连后续分组，容器内显示简短错误提示（"该设置分组加载失败，请尝试重启插件"），控制台打印分组名与异常
+- **IndexedDB 库名 `astral-trek-sync-db` → `astra-sync-db`**：首次启动检测旧库存在时，读全量 kv store，写入新库后删除旧库；迁移幂等、失败静默，降级为空新库。已授权用户的 OneDrive 同步状态、删除历史、mapping 全部保留
+-  **「检测远端变更后同步延迟」功能整体删除**
+
+### 文档
+- **manifest / package description 更新**：反映当前实际功能（聚合工作台、全文搜索、OneDrive 同步、Markdown+、astra 查询块），移除已不再是核心卖点的知识图谱、插件管理、库健康等过时描述
+- **CODE_WIKI 仓库地址修正**：`obsidian-astral-trek` → `obsidian-astra`
+
+
 ## [26.3.2] - 2026-11-01
 
 ### 调整
