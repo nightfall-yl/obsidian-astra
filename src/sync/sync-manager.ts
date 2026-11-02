@@ -49,6 +49,7 @@ import {
   doActualSyncV3,
   type SyncStatusType,
 } from "./syncEngine";
+import { SyncAutoScheduler, type AutoSyncSource } from "./syncScheduler";
 import { setSyncDebugEnabled, syncLog } from "./log";
 
 /** 同步运行中需要实时显示到状态栏的步骤（→ i18n 键） */
@@ -148,9 +149,7 @@ export class SyncManager {
   private statusListeners = new Set<(info: SyncStatusInfo) => void>();
   private currentStatus: SyncStatusInfo = { status: "idle" };
 
-  private autoRunTimer: number | null = null;
-  private initRunTimer: number | null = null;
-  private onSaveTimer: number | null = null;
+  private autoScheduler: SyncAutoScheduler;
   /** 状态栏相对时间刷新定时器（对齐上游 30s interval） */
   private statusBarTimer: number | null = null;
   private statusBarItemEl: HTMLElement | null = null;
@@ -159,6 +158,11 @@ export class SyncManager {
 
   constructor(plugin: AstraDashboardPlugin) {
     this.plugin = plugin;
+    // 统一调度器：自动同步三个来源（启动首次 / 定时 / 保存后）共用一个实现，
+    // 同时保证任意两次自动同步之间至少间隔 AUTO_MIN_INTERVAL_MS。
+    this.autoScheduler = new SyncAutoScheduler(
+      (source: AutoSyncSource) => this.schedulerRunAutoSync(source)
+    );
   }
 
   // ─────────────────────────── lifecycle ───────────────────────────
@@ -193,6 +197,7 @@ export class SyncManager {
   }
 
   onunload(): void {
+    this.autoScheduler.stop();
     this.clearTimers();
     this.unregisterVaultEvents();
     this.oauth2Info?.helperModal?.close();
@@ -249,30 +254,31 @@ export class SyncManager {
   /** 应用 enabled 开关：注册/注销 vault 事件与定时器 */
   applyEnabled(): void {
     const s = this.plugin.data.settings.sync;
-    this.clearTimers();
+    this.autoScheduler.stop();
     this.unregisterVaultEvents();
 
     if (!s.enabled) {
       return;
     }
 
+    // 保存后同步：独立开关，与 autoRunEveryMilliseconds 无关
+    // 但：modify handler 本身始终注册（还承担删除/重命名历史记录），
+    // 只有 syncOnSaveEnabled 时才投递 onSaveModified() 给调度器。
     this.registerVaultEvents();
 
-    if (s.initRunAfterMilliseconds > 0) {
-      this.initRunTimer = window.setTimeout(() => {
-        void this.syncRun("autoOnceInit").catch((err) => {
-          syncLog.error("init sync failed", err);
-        });
-      }, s.initRunAfterMilliseconds);
-    }
+    // 自动周期同步 + 启动首次：仅 autoRunEveryMilliseconds > 0 时启动。
+    // 周期关闭时不跑启动首次（按用户明确要求的行为矩阵）。
     if (s.autoRunEveryMilliseconds > 0) {
-      this.autoRunTimer = window.setInterval(() => {
-        void this.syncRun("auto").catch((err) => {
-          syncLog.error("auto sync failed", err);
-        });
-      }, s.autoRunEveryMilliseconds);
+      this.autoScheduler.start(s.autoRunEveryMilliseconds);
     }
+
     this.updateStatusBar();
+  }
+
+  /** 调度器的执行回调（纯内部：被 SyncAutoScheduler 持有） */
+  private async schedulerRunAutoSync(source: AutoSyncSource): Promise<void> {
+    // syncInProgress 已由 SyncAutoScheduler 外部管理，这里不检查
+    await this.syncRun(source, /*silent*/ true);
   }
 
   /** 状态栏：空闲时显示上次成功同步的相对时间（对齐上游） */
@@ -297,18 +303,6 @@ export class SyncManager {
   }
 
   private clearTimers(): void {
-    if (this.autoRunTimer !== null) {
-      window.clearInterval(this.autoRunTimer);
-      this.autoRunTimer = null;
-    }
-    if (this.initRunTimer !== null) {
-      window.clearTimeout(this.initRunTimer);
-      this.initRunTimer = null;
-    }
-    if (this.onSaveTimer !== null) {
-      window.clearTimeout(this.onSaveTimer);
-      this.onSaveTimer = null;
-    }
     if (this.statusBarTimer !== null) {
       window.clearInterval(this.statusBarTimer);
       this.statusBarTimer = null;
@@ -319,7 +313,6 @@ export class SyncManager {
     if (this.vaultEventRefs.length > 0) {
       return;
     }
-    const s = this.plugin.data.settings.sync;
 
     // 删除/重命名历史是三向合并的核心输入，必须始终记录
     const deleteRef = this.plugin.app.vault.on("delete", (file) => {
@@ -340,25 +333,30 @@ export class SyncManager {
     });
     this.vaultEventRefs.push(renameRef);
 
-    // 保存后防抖自动同步（syncOnSaveAfterMilliseconds > 0 时启用）
-    if (s.syncOnSaveAfterMilliseconds > 0) {
-      const debounceMs = s.syncOnSaveAfterMilliseconds;
-      const modifyRef = this.plugin.app.vault.on("modify", (file: TAbstractFile) => {
-        if (!(file instanceof TFile)) {
-          return;
-        }
-        if (this.onSaveTimer !== null) {
-          window.clearTimeout(this.onSaveTimer);
-        }
-        this.onSaveTimer = window.setTimeout(() => {
-          this.onSaveTimer = null;
-          void this.syncRun("auto").catch((err) => {
-            syncLog.error("sync-on-save failed", err);
-          });
-        }, debounceMs);
-      });
-      this.vaultEventRefs.push(modifyRef);
-    }
+    // 保存后触发自动同步：trailing debounce + minInterval 都由 SyncAutoScheduler 统一处理。
+    // 独立布尔开关 syncOnSaveEnabled 控制是否投递——不再依附 autoRunEveryMilliseconds。
+    // 构造插件自身数据文件的归一化路径集合，用于排除：
+    // saveSettings() 写 data.json、StaticStore 写 static-data.json 都会触发 vault modify，
+    // 若不排除会形成「syncRun → saveSettings → modify → syncRun」的反馈环。
+    const pluginDir =
+      this.plugin.manifest.dir ??
+      normalizePath(
+        [this.plugin.app.vault.configDir, "plugins", this.plugin.manifest.id].join("/")
+      );
+    const pluginOwnDataFiles = new Set<string>([
+      normalizePath([pluginDir, "data.json"].join("/")),
+      normalizePath([pluginDir, "static-data.json"].join("/")),
+    ]);
+
+    const modifyRef = this.plugin.app.vault.on("modify", (file: TAbstractFile) => {
+      if (!(file instanceof TFile)) return;
+      const normalized = normalizePath(file.path);
+      if (pluginOwnDataFiles.has(normalized)) return; // 自己的数据文件，跳过
+      const s = this.plugin.data.settings.sync;
+      if (!s.syncOnSaveEnabled) return; // 保存后同步开关关闭，不投递
+      this.autoScheduler.onSaveModified();
+    });
+    this.vaultEventRefs.push(modifyRef);
   }
 
   private unregisterVaultEvents(): void {
@@ -575,6 +573,9 @@ export class SyncManager {
 
     this.syncing = true;
     this.setSyncIcon(true, triggerSource);
+    // 通知统一调度器：自动同步执行中（minInterval 起点在 finish 时落盘）。
+    // 手动同步也标记——调度器 markRunFinished 是幂等的，不会造成问题。
+    this.autoScheduler.markRunStarted();
     // 与上游语义一致：空密码 = 不加密
     const password = s.password;
     try {
@@ -738,6 +739,9 @@ export class SyncManager {
       this.syncing = false;
       this.setSyncIcon(false);
       this.updateStatusBar();
+      // 通知统一调度器：本次结束。markRunFinished 会把 minInterval 起点推到当前时刻，
+      // 且 reschedule() 可能发现还有挂起的自动请求等待执行。
+      this.autoScheduler.markRunFinished();
     }
 
     // 成功结束后短暂停留再回到 idle

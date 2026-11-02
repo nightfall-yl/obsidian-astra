@@ -1211,31 +1211,7 @@ function renderSyncSettings(
     dse.settingEl.appendChild(dse.controlEl);
   }
 
-  // 保存后同步延迟
-  basicGroup.addSetting((setting) => {
-    setting
-      .setName($t("settings_saverun"))
-      .setDesc($t("settings_saverun_desc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("-1", $t("settings_saverun_notset"))
-          .addOption("0", $t("settings_saverun_instant"))
-          .addOption("5000", $t("settings_saverun_5sec"))
-          .addOption("10000", $t("settings_saverun_10sec"))
-          .addOption("30000", $t("settings_saverun_30sec"))
-          .addOption("60000", $t("settings_saverun_1min"))
-          .setValue(`${s.syncOnSaveAfterMilliseconds}`)
-          .onChange((value) => {
-            void (async () => {
-              s.syncOnSaveAfterMilliseconds = parseInt(value);
-              await plugin.saveSettings();
-              syncManager.applyEnabled();
-            })();
-          })
-      );
-  });
-
-  // 自动运行
+  // 自动同步（单一下拉四档，含启动首次固定 5s 延迟 + 周期运行）
   basicGroup.addSetting((setting) => {
     setting
       .setName($t("settings_autorun"))
@@ -1243,8 +1219,6 @@ function renderSyncSettings(
       .addDropdown((dropdown) =>
         dropdown
           .addOption("-1", $t("settings_autorun_notset"))
-          .addOption("5000", $t("settings_autorun_second", { time: 5 }))
-          .addOption("60000", $t("settings_autorun_1min"))
           .addOption("300000", $t("settings_autorun_5min"))
           .addOption("600000", $t("settings_autorun_10min"))
           .addOption("1800000", $t("settings_autorun_30min"))
@@ -1259,25 +1233,19 @@ function renderSyncSettings(
       );
   });
 
-  // 启动后自动运行一次
+  // 保存后同步延迟（独立布尔开关；固定 5s trailing debounce，不可调；两次自动同步间最小 30s 间隔）
   basicGroup.addSetting((setting) => {
     setting
-      .setName($t("settings_runoncestartup"))
-      .setDesc($t("settings_runoncestartup_desc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("-1", $t("settings_runoncestartup_notset"))
-          .addOption("1000", $t("settings_runoncestartup_1sec"))
-          .addOption("10000", $t("settings_runoncestartup_10sec"))
-          .addOption("30000", $t("settings_runoncestartup_30sec"))
-          .setValue(`${s.initRunAfterMilliseconds}`)
-          .onChange((value) => {
-            void (async () => {
-              s.initRunAfterMilliseconds = parseInt(value);
-              await plugin.saveSettings();
-              syncManager.applyEnabled();
-            })();
-          })
+      .setName($t("settings_syncOnSave"))
+      .setDesc($t("settings_syncOnSave_desc"))
+      .addToggle((toggle) =>
+        toggle.setValue(s.syncOnSaveEnabled).onChange((value) => {
+          void (async () => {
+            s.syncOnSaveEnabled = value;
+            await plugin.saveSettings();
+            syncManager.applyEnabled();
+          })();
+        })
       );
   });
 

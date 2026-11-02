@@ -4,6 +4,21 @@
 
 > 说明：本更新日志自 `26.1.1` 起维护。
 
+## [26.3.4] - 2026-11-02
+
+### 调整
+- **自动同步触发时机收敛**：设置页 Vault Sync 保留两项——
+  - 「自动同步」(`autoRunEveryMilliseconds`，单下拉四档：不设置 / 每 5 分钟 / 每 10 分钟 / 每 30 分钟；非「不设置」时启动后 5 秒先跑一次) 与「保存后同步延迟」(`syncOnSaveEnabled`，布尔开关，文件保存后固定 5 秒触发)；同时删除「启动后自动运行一次」(`initRunAfterMilliseconds`) 
+  - 两者由统一调度器 `SyncAutoScheduler`（含可测试纯函数 `computeScheduledRunTime`）承接原先三个定时器的职责；任意两次自动同步之间强制最小间隔 30s（手动同步不受此限制）
+- **旧配置兼容**：`syncOnSaveAfterMilliseconds > 0` 自动映射为新布尔开关 true，用户显式设置的新字段优先；`autoRunEveryMilliseconds` 非四档值（如 1min / 15min）在 `normalizeSyncSettings` 中按最近差值映射到合法档位；两个废弃字段在归一化时被显式删除，用户已保存的数值不会误被解释为开启
+
+### 修复
+- **OneDrive 同步重复触发**：syncRun 成功收尾调用 `saveSettings()` 写 data.json → vault modify 事件 → 被自身注册的 syncOnSave 防抖监听捕获 → 再次触发 syncRun，形成可无限迭代的反馈环；现在 modify handler 排除插件目录下的 `data.json` / `static-data.json`
+- **IndexedDB Promise rejection 规范化**：`open oldDB` / `open newDB` / `write tx` 三处 `reject(req.error)` 加 `?? new Error("...")` 兜底，消 `prefer-promise-reject-errors` 警告；顺带删 `value as unknown` 多余断言
+
+### 性能
+- **Dashboard 刷新事件合并**：vault modify/create/delete/rename 统一 100ms trailing debounce、metadataCache resolved 300ms debounce，500ms maxWait 持续事件流强制刷新兜底；saveSettings / saveDashboardPreferences 等即时反馈路径保留同步刷新不受影响；onunload 清理定时器并兜底执行待刷新
+
 ## [26.3.3] - 2026-11-02
 
 ### 调整

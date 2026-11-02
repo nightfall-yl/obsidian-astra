@@ -56,6 +56,56 @@ export default class AstraDashboardPlugin extends Plugin {
   private saveTimer: number | null = null;
   private vaultEventsRegistered = false;
 
+  /** Dashboard 刷新合并调度器：把连续 vault/metadataCache 事件合并成一次刷新。
+   *  writeDebounce = 100ms（vault modify/create/delete/rename 统一）
+   *  resolvedDebounce = 300ms（metadataCache resolved，启动阶段密集）
+   *  maxWait = 500ms（持续事件流强制刷新上限）
+   *  saveSettings() 等即时路径直接调 refreshDashboardViews()，不走调度器。 */
+  private refreshCoalesceTimer: number | null = null;
+  /** maxWait 窗口起点，-1 表示未启用（定时器为空、首次进入时设为 now）。 */
+  private refreshFirstScheduleAt = -1;
+  private refreshHasPendingForce = false;
+  private readonly REFRESH_WRITE_DEBOUNCE = 100;
+  private readonly REFRESH_RESOLVED_DEBOUNCE = 300;
+  private readonly REFRESH_MAX_WAIT = 500;
+
+  /** 调度一次延迟刷新。trailing debounce + maxWait。
+   *  force=true 时会让下一次实际刷新带上 invalidate 标记。 */
+  private scheduleRefresh(delayMs: number, force = false): void {
+    const now = Date.now();
+    if (force) this.refreshHasPendingForce = true;
+
+    // maxWait：距首次调度已超过 REFRESH_MAX_WAIT，强制走一次
+    if (
+      this.refreshFirstScheduleAt >= 0 &&
+      now - this.refreshFirstScheduleAt >= this.REFRESH_MAX_WAIT
+    ) {
+      this.doScheduledRefresh();
+      // doScheduledRefresh 把 firstScheduleAt 清成 -1，fall through 到下面重新开启新窗口
+    }
+
+    // 首次进入 debounce 窗口（timer 为空）或 maxWait 刚触发过，都设为当前窗口起点
+    if (this.refreshFirstScheduleAt < 0) {
+      this.refreshFirstScheduleAt = now;
+    }
+
+    if (this.refreshCoalesceTimer !== null) {
+      window.clearTimeout(this.refreshCoalesceTimer);
+    }
+    this.refreshCoalesceTimer = window.setTimeout(() => {
+      this.doScheduledRefresh();
+    }, delayMs);
+  }
+
+  /** 真正执行调度器合并后的刷新；清空 debounce 状态。 */
+  private doScheduledRefresh(): void {
+    this.refreshCoalesceTimer = null;
+    this.refreshFirstScheduleAt = -1;
+    const force = this.refreshHasPendingForce;
+    this.refreshHasPendingForce = false;
+    this.refreshDashboardViews(force);
+  }
+
   constructor(app: App, pluginManifest: PluginManifest) {
     super(app, pluginManifest);
     this.section2Store = new StaticStore(this);
@@ -162,6 +212,18 @@ export default class AstraDashboardPlugin extends Plugin {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
       void this.saveData(this.data);
+    }
+
+    // 清理刷新合并调度器，兜底执行最后一次
+    if (this.refreshCoalesceTimer !== null) {
+      window.clearTimeout(this.refreshCoalesceTimer);
+      this.refreshCoalesceTimer = null;
+      if (this.refreshFirstScheduleAt >= 0 || this.refreshHasPendingForce) {
+        this.refreshFirstScheduleAt = -1;
+        const force = this.refreshHasPendingForce;
+        this.refreshHasPendingForce = false;
+        this.refreshDashboardViews(force);
+      }
     }
   }
 
@@ -400,7 +462,7 @@ export default class AstraDashboardPlugin extends Plugin {
       this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         void this.stats.recordFileChange(file).then(() => {
-          this.refreshDashboardViews();
+          this.scheduleRefresh(this.REFRESH_WRITE_DEBOUNCE);
         });
       })
     );
@@ -409,7 +471,7 @@ export default class AstraDashboardPlugin extends Plugin {
       this.app.vault.on("create", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         void this.stats.recordFileChange(file, true).then(() => {
-          this.refreshDashboardViews();
+          this.scheduleRefresh(this.REFRESH_WRITE_DEBOUNCE);
         });
       })
     );
@@ -418,7 +480,7 @@ export default class AstraDashboardPlugin extends Plugin {
       this.app.vault.on("delete", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         this.stats.recordDelete(file);
-        this.refreshDashboardViews();
+        this.scheduleRefresh(this.REFRESH_WRITE_DEBOUNCE);
       })
     );
 
@@ -426,7 +488,7 @@ export default class AstraDashboardPlugin extends Plugin {
       this.app.vault.on("rename", (file, oldPath) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
         this.stats.recordRename(file, oldPath);
-        this.refreshDashboardViews();
+        this.scheduleRefresh(this.REFRESH_WRITE_DEBOUNCE);
       })
     );
 
@@ -440,7 +502,7 @@ export default class AstraDashboardPlugin extends Plugin {
       ) {
         return;
       }
-      this.refreshDashboardViews();
+      this.scheduleRefresh(this.REFRESH_RESOLVED_DEBOUNCE);
     };
     this.registerEvent(
       this.app.metadataCache.on("resolved", resolvedCb as () => void)

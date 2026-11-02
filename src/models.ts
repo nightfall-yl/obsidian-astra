@@ -192,12 +192,10 @@ export interface OneDriveSyncSettings {
   protectModifyPercentage: number;
   /** 上传/下载并发数 */
   concurrency: number;
-  /** 自动同步间隔（毫秒；-1 = 关闭） */
+  /** 自动同步间隔（毫秒；-1 = 关闭）。含启动首次固定 5s 延迟 + 周期运行。 */
   autoRunEveryMilliseconds: number;
-  /** 启动后首次同步延迟（毫秒；-1 = 关闭） */
-  initRunAfterMilliseconds: number;
-  /** 保存笔记后防抖同步延迟（毫秒；-1 = 关闭） */
-  syncOnSaveAfterMilliseconds: number;
+  /** 保存后同步延迟（固定 5s trailing debounce，不可调）。与 autoRunEveryMilliseconds 独立的开关。 */
+  syncOnSaveEnabled: boolean;
   /** 上次成功同步时间戳（-1 = 尚未同步过） */
   lastSynced: number;
   /** 输出同步引擎调试日志 */
@@ -221,8 +219,7 @@ export const DEFAULT_SYNC_SETTINGS: OneDriveSyncSettings = {
   protectModifyPercentage: 100,
   concurrency: 5,
   autoRunEveryMilliseconds: -1,
-  initRunAfterMilliseconds: -1,
-  syncOnSaveAfterMilliseconds: -1,
+  syncOnSaveEnabled: false,
   lastSynced: -1,
   debug: false,
 };
@@ -603,6 +600,45 @@ export function normalizeSyncSettings(
   merged.concurrency = 5;
   // 该保护已从设置页移除，固定为 100（去除保护，总是同步）
   merged.protectModifyPercentage = 100;
+  // 自动同步间隔：当前设置页只保留四档（-1 关闭 / 5min / 10min / 30min），
+  // 旧用户存储里可能有 1min / 15min 等历史值 → 映射到最近的合法档位。
+  const VALID_AUTORUN_MS = [-1, 300_000, 600_000, 1_800_000];
+  const savedAutoRun = saved?.autoRunEveryMilliseconds;
+  if (typeof savedAutoRun === "number") {
+    if (savedAutoRun <= 0) {
+      merged.autoRunEveryMilliseconds = -1;
+    } else if (VALID_AUTORUN_MS.includes(savedAutoRun)) {
+      merged.autoRunEveryMilliseconds = savedAutoRun; // 已经是合法档位
+    } else {
+      // 找三个正数档位中差值最小的
+      const positive = VALID_AUTORUN_MS.filter((v) => v > 0);
+      let nearest = positive[0]!;
+      let nearestDiff = Math.abs(savedAutoRun - nearest);
+      for (const v of positive) {
+        const d = Math.abs(savedAutoRun - v);
+        if (d < nearestDiff) {
+          nearest = v;
+          nearestDiff = d;
+        }
+      }
+      merged.autoRunEveryMilliseconds = nearest;
+    }
+  }
+  // 已从设置裁剪的旧字段：启动后运行一次、保存后同步延迟。
+  // syncOnSaveAfterMilliseconds > 0 视为用户曾经开启过保存后同步 → 映射为新布尔开关 true；
+  // 但如果用户显式设置了新字段 syncOnSaveEnabled，则尊重用户显式值，不覆盖。
+  // 两个旧字段最终显式 delete，避免 stale 值被序列化回 data.json。
+  type SavedWithLegacy = Partial<OneDriveSyncSettings> & {
+    syncOnSaveAfterMilliseconds?: number;
+    initRunAfterMilliseconds?: number;
+  };
+  const legacy = (saved ?? {}) as SavedWithLegacy;
+  const savedNewField = saved?.syncOnSaveEnabled;
+  if (typeof savedNewField !== "boolean" && (legacy.syncOnSaveAfterMilliseconds ?? 0) > 0) {
+    merged.syncOnSaveEnabled = true;
+  }
+  delete legacy.syncOnSaveAfterMilliseconds;
+  delete legacy.initRunAfterMilliseconds;
   return merged;
 }
 
