@@ -38,7 +38,7 @@ const runMigrationIfNeeded = (): Promise<void> => {
       const oldDb: IDBDatabase | null = await new Promise<IDBDatabase>((resolve, reject) => {
         const req = indexedDB.open(OLD_DB_NAME, 1);
         req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+        req.onerror = () => reject(req.error ?? new Error("open oldDB failed"));
       }).catch(() => null);
 
       if (!oldDb) return; // 旧库不存在，跳过
@@ -70,18 +70,18 @@ const runMigrationIfNeeded = (): Promise<void> => {
           }
         };
         req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+        req.onerror = () => reject(req.error ?? new Error("open newDB failed"));
       });
 
       // 4. 写入新库：readwrite tx，逐条 put
       const writeTx = newDb.transaction(STORE_NAME, "readwrite");
       const writeStore = writeTx.objectStore(STORE_NAME);
       for (const [key, value] of records) {
-        writeStore.put(value as unknown, key);
+        writeStore.put(value, key);
       }
       await new Promise<void>((resolve, reject) => {
         writeTx.oncomplete = () => resolve();
-        writeTx.onerror = () => reject(writeTx.error);
+        writeTx.onerror = () => reject(writeTx.error ?? new Error("write tx failed"));
       });
       newDb.close();
 

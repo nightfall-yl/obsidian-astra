@@ -3,7 +3,7 @@
   "name": "Astra",
   "version": "26.3.3",
   "minAppVersion": "1.11.0",
-  "description": "All-in-one Obsidian workspace plugin: interactive dashboard, vault-wide full-text search (CJK-friendly), OneDrive vault sync, a lightweight Markdown linter, forced view mode, and Dataview-style `astra` query blocks.",
+  "description": "All-in-one workspace plugin: interactive dashboard, vault-wide full-text search (CJK-friendly), OneDrive vault sync, a lightweight Markdown linter, forced view mode, and Dataview-style `astra` query blocks.",
   "author": "nightfall",
   "isDesktopOnly": false
 }
