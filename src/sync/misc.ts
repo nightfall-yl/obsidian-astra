@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/misc.ts)
  * Trimmed to the helpers actually used by the sync engine; the nanoid
  * dependency is replaced by a crypto-based randomId.
  */

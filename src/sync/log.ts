@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/moreOnLog.ts)
  * Uses the loglevel dependency already present in astral-trek instead of
  * upstream's identical loglevel-based module.
  */

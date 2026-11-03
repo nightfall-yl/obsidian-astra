@@ -1,6 +1,5 @@
 /**
  * Minimal replacements for upstream's `p-queue` and `aggregate-error`
- * dependencies (vendored from nightfall-yl/obsidian-third-party-sync@6240bcc,
  * which used both in src/sync.ts). Only the API surface actually used by the
  * sync engine is implemented: bounded concurrency, pause/clear, onIdle.
  */

@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/baseTypes.ts)
  * Trimmed to OneDrive-only sync: S3/WebDAV types removed, i18n/lang types removed.
  */
 

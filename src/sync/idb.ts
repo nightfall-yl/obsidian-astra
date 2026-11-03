@@ -1,6 +1,5 @@
 /**
  * Minimal IndexedDB key-value store that replaces upstream's `localforage`
- * dependency (vendored from nightfall-yl/obsidian-third-party-sync@6240bcc,
  * which used localforage for src/localdb.ts — NOT sql.js, so no WASM needed).
  *
  * Upstream created one localforage instance per logical table

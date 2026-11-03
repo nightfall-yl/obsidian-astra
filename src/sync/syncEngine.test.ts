@@ -1,6 +1,5 @@
 /**
  * Unit tests for the vendored V3 sync engine's three-way merge decisions
- * (nightfall-yl/obsidian-third-party-sync@6240bcc port in src/sync/syncEngine.ts).
  */
 
 import { describe, expect, it } from "vitest";

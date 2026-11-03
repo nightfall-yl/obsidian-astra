@@ -1,6 +1,5 @@
 /**
  * Unit tests for the vendored encrypt/metadataOnRemote modules
- * (nightfall-yl/obsidian-third-party-sync@6240bcc port in src/sync/).
  * Exercises the dependency replacements: rfc4648 → base64url helpers,
  * fast-equals → local deepEqual.
  */

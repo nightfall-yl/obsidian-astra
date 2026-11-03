@@ -1454,8 +1454,7 @@ function renderMinimalSettings(
     await manager.saveSettings();
   };
 
-  // 「显示设置项」开关：借鉴 third-party-sync 调试模式的收起机制——
-  // 开关常显，组内其余设置项默认隐藏，打开后才显示。
+  // 「显示设置项」开关：开关常显，组内其余设置项默认隐藏，打开后才显示。
   const minimalSettingEls: HTMLElement[] = [];
   const applyMinimalVisibility = (): void => {
     const show = manager.settings.showSettings === true;

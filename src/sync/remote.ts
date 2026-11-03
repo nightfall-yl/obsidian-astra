@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/remote.ts)
  * Trimmed to the OneDrive service only — astral-trek ports just that backend.
  */
 

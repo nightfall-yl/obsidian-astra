@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/sync.ts)
  * V3 sync engine (prevSync-based three-way merge), remote-agnostic.
  *
  * Adaptations for astral-trek (zero new npm dependencies):

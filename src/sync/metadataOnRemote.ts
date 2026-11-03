@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc
  * (src/metadataOnRemote.ts). The fast-equals and rfc4648 dependencies are
  * replaced by a local deepEqual and local base64url helpers.
  */

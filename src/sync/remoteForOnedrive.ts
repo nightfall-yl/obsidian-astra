@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc
  * (src/remoteForOnedrive.ts).
  *
  * Adaptations for astral-trek (zero new npm dependencies):
@@ -60,7 +59,6 @@ interface GraphUser {
 export const DEFAULT_ONEDRIVE_CONFIG: OnedriveConfig = {
   accessToken: "",
   // Author-owned PKCE app: this project's own Azure app registration (also
-  // used by the author's upstream third-party-sync). Its registration includes
   // the redirect URI obsidian://astral-trek-onedrive, so this works out of the box.
   clientID: "ad95e28f-d89a-43db-8ce6-0e64ef1283aa",
   authority: "https://login.microsoftonline.com/consumers/",

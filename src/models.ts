@@ -204,8 +204,6 @@ export interface OneDriveSyncSettings {
 
 export const DEFAULT_SYNC_SETTINGS: OneDriveSyncSettings = {
   enabled: true,
-  // 作者自有的 PKCE 应用（与作者维护的上游 third-party-sync 共用同一注册，
-  // 其 Azure 应用注册已含 obsidian://astral-trek-onedrive 重定向 URI）。
   onedriveConfig: { ...DEFAULT_ONEDRIVE_CONFIG },
   password: "",
   syncDirection: "bidirectional",

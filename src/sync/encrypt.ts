@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/encrypt.ts)
  * The rfc4648 dependency is replaced by local base64url helpers.
  */
 

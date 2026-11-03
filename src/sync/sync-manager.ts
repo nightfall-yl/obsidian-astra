@@ -1,6 +1,5 @@
 /**
  * astral-trek side wiring for the vendored OneDrive sync engine
- * (nightfall-yl/obsidian-third-party-sync@6240bcc).
  *
  * Owns: settings access, the internal DB + vaultRandomID lifecycle, the
  * remote client, vault delete/rename history recording, auto-sync timers,

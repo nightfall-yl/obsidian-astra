@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc
  * (src/obsFolderLister.ts). The @fyears/tsqueue dependency is replaced by a
  * plain array used as a LIFO queue (order does not matter here).
  */

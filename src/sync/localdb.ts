@@ -1,5 +1,4 @@
 /**
- * vendored from nightfall-yl/obsidian-third-party-sync@6240bcc (src/localdb.ts)
  * - localforage is replaced by the local minimal IndexedDB KV store (src/sync/idb.ts)
  * - nanoid is replaced by crypto-based randomId
  * - the historical migration chain is dropped: astral-trek starts fresh at the
