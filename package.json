@@ -1,7 +1,7 @@
 {
   "name": "astral-trek",
   "version": "26.3.4",
-  "description": "All-in-one workspace plugin: interactive dashboard, vault-wide full-text search (CJK-friendly), OneDrive vault sync, a lightweight Markdown linter, forced view mode, and Dataview-style `astra` query blocks.",
+  "description": "All-in-one workspace: dashboard, vault search, OneDrive sync and markdown enhancements.",
   "main": "main.js",
   "type": "module",
   "scripts": {

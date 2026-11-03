@@ -241,11 +241,17 @@ export class SyncManager {
     if (this.statusBarItemEl === null) {
       this.statusBarItemEl = this.plugin.addStatusBarItem();
     }
-    const step =
-      $t(stepKey) +
-      (this.currentStatus.status === "syncing" && this.currentStatus.message
-        ? ` ${this.currentStatus.message}`
-        : "");
+    let step = $t(stepKey);
+    if (this.currentStatus.status === "syncing" && this.currentStatus.message) {
+      const parts = this.currentStatus.message.split("/").map(Number);
+      if (parts.length === 2 && parts.every(Number.isFinite) && parts[1]! > 0) {
+        const [idx, total] = parts;
+        const pct = Math.min(100, Math.round((idx! / total!) * 100));
+        step += ` ${this.currentStatus.message}（${pct}%）`;
+      } else {
+        step += ` ${this.currentStatus.message}`;
+      }
+    }
     this.statusBarItemEl.setText(
       $t("sync.status.statusBarProgress", { step })
     );

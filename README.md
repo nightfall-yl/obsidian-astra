@@ -1,6 +1,6 @@
 # Astra
 
-Your personal workspace plugin — dashboard, full-text search, OneDrive sync, and Markdown enhancements, all on one page.
+All-in-one workspace: dashboard, vault search, OneDrive sync and markdown enhancements.
 
 [![Version](https://img.shields.io/github/v/release/nightfall-yl/obsidian-astra?label=version)](https://github.com/nightfall-yl/obsidian-astra) | [![Obsidian](https://img.shields.io/badge/Obsidian-1.11.0%2B-purple)](https://obsidian.md) | [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 

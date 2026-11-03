@@ -1,6 +1,6 @@
 # Astra
 
-个人工作台插件 — 工作台 · 全文搜索 · OneDrive 同步 · Markdown 增强，一页尽收。
+一体化工作台：看板、库内搜索、OneDrive 同步与 Markdown 增强。
 
 [![Version](https://img.shields.io/github/v/release/nightfall-yl/obsidian-astra?label=version)](https://github.com/nightfall-yl/obsidian-astra) | [![Obsidian](https://img.shields.io/badge/Obsidian-1.11.0%2B-purple)](https://obsidian.md) | [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
