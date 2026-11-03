@@ -217,4 +217,4 @@ tags: [配置]
 
 ## 安装
 
-将构建产物（`main.js`、`manifest.json`、`styles.css`，可直接使用 `dist/` 内的副本）放入 `<你的库>/.obsidian/plugins/astral-trek/` 目录，然后在 Obsidian 命令面板执行 **Reload app without saving**（或重启 Obsidian）即可。
+从 [GitHub Releases](https://github.com/nightfall-yl/obsidian-astra/releases/latest) 下载最新版本的三个构建文件（`main.js`、`manifest.json`、`styles.css`）。或本地构建：`npm ci && npm run build`（产物输出到仓库根目录及 `dist/`）。将三个文件放入 `<你的库>/.obsidian/plugins/astral-trek/` 目录，然后在 Obsidian 命令面板执行 **Reload app without saving**（或重启 Obsidian）即可。

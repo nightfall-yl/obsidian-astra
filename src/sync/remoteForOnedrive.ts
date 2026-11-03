@@ -32,6 +32,7 @@ import { syncLog } from "./log";
 import {
   remoteSnapshotClear,
   remoteSnapshotLoadAll,
+  remoteSnapshotRemove,
   remoteSnapshotSaveAll
 } from "./idb";
 
@@ -408,9 +409,15 @@ const fromDriveItemToRemoteItem = (
   // items (its parent is the app folder, which does NOT contain remoteBaseDir).
   // Map it to the "/" root key so listFromRemote filters it out instead of
   // treating it as an unrecognized item.
+  // Use path-segment-aware check instead of plain includes(), otherwise an
+  // app folder name like "Obsidian Vault Sync" falsely matches "/Obsidian Vault"
+  // substring and breaks the vault-root detection.
+  const parentPath = x.parentReference.path;
+  const hasRemoteBaseDirAsSegment =
+    parentPath.endsWith(`/${remoteBaseDir}`) ||
+    parentPath.includes(`/${remoteBaseDir}/`);
   const isVaultRootItem =
-    x.name === remoteBaseDir &&
-    !x.parentReference.path.includes(`/${remoteBaseDir}`);
+    x.name === remoteBaseDir && !hasRemoteBaseDirAsSegment;
   if (isVaultRootItem) {
     return {
       key: "/",
@@ -540,11 +547,20 @@ const oneDriveApiRequest = async (
     const rawText: unknown = resp.text;
     const raw =
       typeof rawText === "string" ? rawText : JSON.stringify(json);
-    throw Error(
+    const apiError = Error(
       `OneDrive API ${method} ${theUrl} 失败 (HTTP ${resp.status}): ${
         detail || "无解析详情"
       }\nRAW BODY: ${raw}`
-    );
+    ) as Error & { status?: number; code?: string };
+    // Attach machine-readable metadata so callers can distinguish "the item is
+    // gone" (404/itemNotFound) from auth/throttling/server/network failures
+    // without parsing the human-readable message.
+    apiError.status = resp.status;
+    const graphErr = json.error as Record<string, unknown> | undefined;
+    if (graphErr !== undefined && typeof graphErr.code === "string") {
+      apiError.code = graphErr.code;
+    }
+    throw apiError;
   }
   return json;
 };
@@ -807,7 +823,7 @@ export const listFromRemote = async (
   const DELTA_LINK_KEY = "@odata.deltaLink";
 
   // 从 IndexedDB 读远端快照（如果库尚未创建或读失败，返回 {} 降级为全量枚举）
-  const idbSnapshot = await remoteSnapshotLoadAll<RemoteItem>();
+  let idbSnapshot = await remoteSnapshotLoadAll<RemoteItem>();
 
   const tryDeltaResume =
     !!client.onedriveConfig.deltaLink &&
@@ -841,6 +857,10 @@ export const listFromRemote = async (
       );
       client.onedriveConfig.deltaLink = "";
       await remoteSnapshotClear();
+      // Keep the in-memory base in sync with the store we just cleared; otherwise
+      // the full enumeration below would merge into a stale, already-discarded
+      // snapshot and resurrect entries the remote no longer has.
+      idbSnapshot = {};
       await client.saveUpdatedConfigFunc();
       usedFullEnumeration = true;
     }
@@ -861,7 +881,11 @@ export const listFromRemote = async (
   }));
 
   // ── 合并到快照（从 IDB 读入，浅拷贝避免回写污染原始引用） ──
-  let snapshot: Record<string, RemoteItem> = { ...idbSnapshot };
+  // 全量枚举结果是远端当前状态的唯一事实来源，必须从空快照重建：
+  // 若沿用旧快照做基底，远端已删除但 delta 未报告的键会永远残留（幽灵条目）。
+  let snapshot: Record<string, RemoteItem> = usedFullEnumeration
+    ? {}
+    : { ...idbSnapshot };
 
   for (const entry of entries) {
     // 已删项：从快照中移除（即使 fromDriveItemToRemoteItem 失败也不影响删除判断）
@@ -1166,6 +1190,16 @@ export const deleteFromRemote = async (
 
   await client.init();
   await client.deleteJson(remoteFileName);
+};
+
+/**
+ * Drop one entry from the persisted OneDrive remote snapshot.
+ * `key` is the relative vault key emitted by `listFromRemote` (same shape the
+ * sync engine uses), so no path translation is needed. Deletion is per-key —
+ * the whole store is never reloaded or rewritten.
+ */
+export const removeFromRemoteSnapshot = async (key: string): Promise<void> => {
+  await remoteSnapshotRemove(key);
 };
 
 export const checkConnectivity = async (

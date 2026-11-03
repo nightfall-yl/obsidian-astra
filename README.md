@@ -217,7 +217,7 @@ tags: [配置]
 
 ## Installation
 
-Place the build artifacts (`main.js`, `manifest.json`, `styles.css`, or the copies inside `dist/`) into `<your-vault>/.obsidian/plugins/astral-trek/`, then run **Reload app without saving** from the Obsidian command palette (or restart Obsidian).
+Download the latest release assets (`main.js`, `manifest.json`, `styles.css`) from [GitHub Releases](https://github.com/nightfall-yl/obsidian-astra/releases/latest). Or build locally with `npm ci && npm run build` (outputs to repo root and `dist/`). Place into `<your-vault>/.obsidian/plugins/astral-trek/`, then run **Reload app without saving** from the Obsidian command palette (or restart Obsidian).
 
 ## License
 

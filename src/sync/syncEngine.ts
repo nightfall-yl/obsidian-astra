@@ -52,6 +52,7 @@ import {
 } from "./misc";
 import { MultiError, TaskQueue } from "./queue";
 import type { RemoteClient } from "./remote";
+import { isRemoteItemNotFoundError } from "./remote";
 import type {
   DeletionOnRemote,
   MetadataOnRemote} from "./metadataOnRemote";
@@ -1252,6 +1253,9 @@ export const doActualSyncV3 = async (
   syncLog.debug("Checking if lastSynced is set: ", lastSynced, "== -1?: ", lastSynced === -1);
 
   const potentialErrors: Error[] = [];
+  // Keys skipped because the remote item returned 404: they must not be
+  // carried over into prevSync records.
+  const skippedRemoteNotFoundKeys = new Set<string>();
 
   for (const operation of nested) {
     const isDeleteOp = operation === deletionOps;
@@ -1290,6 +1294,10 @@ export const doActualSyncV3 = async (
             localDeleteFunc,
             password
           );
+
+          if (result.remoteMissing) {
+            skippedRemoteNotFoundKeys.add(key);
+          }
 
           const decision = val.decision;
           if (!isDeleteOp && (decision === undefined || !decision.startsWith("createFolder"))) {
@@ -1330,6 +1338,11 @@ export const doActualSyncV3 = async (
   for (const key of sortedKeys) {
     const state = syncPlan.mixedStates[key];
     if (state === undefined) {
+      continue;
+    }
+    if (skippedRemoteNotFoundKeys.has(key)) {
+      // Remote item was confirmed gone this run: nothing exists on either
+      // side anymore, so it must not be recorded as synced.
       continue;
     }
     if (
@@ -1427,6 +1440,22 @@ export const uploadExtraMeta = async (
   return remoteObjMeta.lastModified;
 };
 
+/**
+ * Forget snapshot entries for a key that no longer exists remotely.
+ * `remoteEncryptedKey` differs from `key` only when E2E encryption is on —
+ * snapshot keys then hold the encrypted path, so both forms must be dropped.
+ */
+const forgetRemoteSnapshotEntries = async (
+  client: RemoteClient,
+  key: string,
+  remoteEncryptedKey: string
+) => {
+  await client.removeFromRemoteSnapshot(key);
+  if (remoteEncryptedKey !== "" && remoteEncryptedKey !== key) {
+    await client.removeFromRemoteSnapshot(remoteEncryptedKey);
+  }
+};
+
 const dispatchOperationToActual = async (
   key: string,
   vaultRandomID: string,
@@ -1455,6 +1484,9 @@ const dispatchOperationToActual = async (
     }
     if (r.existRemote) {
       await client.deleteFromRemote(r.key, password, remoteEncryptedKey);
+      // Keep the delta snapshot in lockstep with the actual remote state: do
+      // not wait for a later delta round to discover our own deletion.
+      await forgetRemoteSnapshotEntries(client, r.key, remoteEncryptedKey);
     }
     await clearDeleteRenameHistoryOfKeyAndVault(db, r.key, vaultRandomID);
   } else if (r.decision === "keepRemoteDelHist") {
@@ -1463,6 +1495,9 @@ const dispatchOperationToActual = async (
     }
     if (r.existRemote) {
       await client.deleteFromRemote(r.key, password, remoteEncryptedKey);
+      // Keep the delta snapshot in lockstep with the actual remote state: do
+      // not wait for a later delta round to discover our own deletion.
+      await forgetRemoteSnapshotEntries(client, r.key, remoteEncryptedKey);
     }
     await clearDeleteRenameHistoryOfKeyAndVault(db, r.key, vaultRandomID);
   } else if (r.decision === "uploadLocalToRemote") {
@@ -1494,13 +1529,29 @@ const dispatchOperationToActual = async (
     }
     await clearDeleteRenameHistoryOfKeyAndVault(db, r.key, vaultRandomID);
   } else if (r.decision === "downloadRemoteToLocal") {
-    await client.downloadFromRemote(
-      r.key,
-      vault,
-      r.mtimeRemote ?? 0,
-      password,
-      remoteEncryptedKey
-    );
+    try {
+      await client.downloadFromRemote(
+        r.key,
+        vault,
+        r.mtimeRemote ?? 0,
+        password,
+        remoteEncryptedKey
+      );
+    } catch (err) {
+      // Self-healing: a stale remote snapshot entry can make a locally absent
+      // file look like "new remote content". If the remote confirms the item
+      // is gone (404/itemNotFound), forget the snapshot key and skip this item
+      // instead of poisoning every subsequent sync run. Auth, throttling,
+      // server and network errors are re-thrown and still count as failures.
+      if (isRemoteItemNotFoundError(err)) {
+        syncLog.warn(
+          `remote item not found (404), dropping it from the remote snapshot: ${r.key}`
+        );
+        await forgetRemoteSnapshotEntries(client, r.key, remoteEncryptedKey);
+        return true;
+      }
+      throw err;
+    }
     await clearDeleteRenameHistoryOfKeyAndVault(db, r.key, vaultRandomID);
   } else if (r.decision === "createFolder") {
     if (!r.existLocal) {
@@ -1534,6 +1585,9 @@ const dispatchOperationToActual = async (
     }
     if (r.existRemote) {
       await client.deleteFromRemote(r.key, password, remoteEncryptedKey);
+      // Keep the delta snapshot in lockstep with the actual remote state: do
+      // not wait for a later delta round to discover our own deletion.
+      await forgetRemoteSnapshotEntries(client, r.key, remoteEncryptedKey);
     }
     await clearDeleteRenameHistoryOfKeyAndVault(db, r.key, vaultRandomID);
   } else if (r.decision === "keepRemoteDelHistFolder") {
@@ -1542,6 +1596,9 @@ const dispatchOperationToActual = async (
     }
     if (r.existRemote) {
       await client.deleteFromRemote(r.key, password, remoteEncryptedKey);
+      // Keep the delta snapshot in lockstep with the actual remote state: do
+      // not wait for a later delta round to discover our own deletion.
+      await forgetRemoteSnapshotEntries(client, r.key, remoteEncryptedKey);
     }
     await clearDeleteRenameHistoryOfKeyAndVault(db, r.key, vaultRandomID);
   } else if (r.decision === "skipFolder") {
@@ -1560,6 +1617,7 @@ const dispatchOperationToActual = async (
   } else {
     throw Error(`unknown decision in ${JSON.stringify(r)}`);
   }
+  return false;
 };
 
 const splitThreeSteps = (
@@ -1680,7 +1738,7 @@ async function syncIndividualItem(
 ) {
   syncLog.debug(`start syncing "${key}" with plan ${JSON.stringify(val)}`);
 
-  await dispatchOperationToActual(
+  const remoteMissing = await dispatchOperationToActual(
     key,
     vaultRandomID,
     val,
@@ -1693,5 +1751,7 @@ async function syncIndividualItem(
 
   syncLog.debug(`finished ${key}`);
 
-  return deletionOp;
+  // `remoteMissing`: the remote item vanished (404) and the stale snapshot
+  // entry was dropped — the item must not be recorded as synced.
+  return { deletionOp, remoteMissing };
 }

@@ -324,6 +324,29 @@ export async function remoteSnapshotSaveAll<T extends { key: string }>(
   }
 }
 
+/**
+ * Delete one snapshot entry by key without loading/rewriting the whole store.
+ * Used for self-healing when the remote item is confirmed gone (HTTP 404) or
+ * right after a successful remote deletion.
+ */
+export async function remoteSnapshotRemove(key: string): Promise<void> {
+  try {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains(REMOTE_SNAPSHOT_STORE)) {
+      return;
+    }
+    const tx = db.transaction(REMOTE_SNAPSHOT_STORE, "readwrite");
+    const txDone = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("remoteSnapshot remove tx failed"));
+    });
+    await requestToPromise(tx.objectStore(REMOTE_SNAPSHOT_STORE).delete(key));
+    await txDone;
+  } catch (err) {
+    console.warn("[remoteSnapshot] remove failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
 export async function remoteSnapshotClear(): Promise<void> {
   try {
     const db = await getDB();

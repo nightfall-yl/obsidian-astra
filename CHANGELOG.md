@@ -4,9 +4,12 @@
 
 > 说明：本更新日志自 `26.1.1` 起维护。
 
-## [26.3.5-preview] - 2026-11-03
+## [26.3.5] - 2026-11-04
 
-> 发布于 26.3.4 tag 之后的补充改动。
+### 修复
+- **OneDrive vault 根目录识别误判**：vault 根目录检测用 `includes("/VaultName")` 子串匹配，当 OneDrive 应用文件夹名恰好以 vault 名开头（如应用文件夹叫 `Obsidian Vault Sync`、vault 名叫 `Obsidian Vault`）时会误判，导致每次同步枚举远端时控制台刷 `skip unrecognized onedrive item` 警告；改为路径段精确匹配（`endsWith` / `includes` 前后均要求 `/` 边界）
+- **删除文件后同步中止（远端快照幽灵条目）**：删除笔记后远端快照未移除对应键，下一轮被判为"远端新增"并下载，遇 HTTP 404 累计 3 条错误后整轮中止，且每轮重复；下载遇 404 现按"远端已不存在"处理，摘除快照键、跳过该条目、不计入错误累计（401/403/429/5xx 与网络错误仍正常报错）
+- **快照键与远端状态不同步**：远端删除成功后立即移除对应快照键，不再等下一轮 delta；全量枚举改为从空快照重建，不再以旧快照为基底
 
 ### 性能
 - **远端快照迁出 data.json**：`settings.sync.onedriveConfig.remoteSnapshot`（约 1,600+ 路径的 OneDrive delta 续传快照）搬到 IndexedDB `astra-sync-db` 的独立 object store `remoteSnapshot`（keyPath=`key`，库版本 1→2）。首次启动自动写 IDB、删内存字段、一次 saveSettings 落盘；幂等标记 `remoteSnapshotMigrated`。IDB 读失败时一律降级为空快照，同步走全量枚举不抛异常。`deltaLink`（小字符串）仍留 settings

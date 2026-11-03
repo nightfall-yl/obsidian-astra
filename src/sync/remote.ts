@@ -7,6 +7,29 @@ import type { Vault } from "obsidian";
 import type { OnedriveConfig } from "./baseTypes";
 import * as onedrive from "./remoteForOnedrive";
 
+/**
+ * True only when the error is positive evidence that the remote item no longer
+ * exists: HTTP 404 or Graph code "itemNotFound".
+ *
+ * Everything else — auth failures (401/403), throttling (429), server errors
+ * (5xx), network failures with no response — must NOT be treated as deletion.
+ * The API layer attaches `status` to thrown errors; reading those properties
+ * keeps this predicate independent of the human-readable message.
+ */
+export const isRemoteItemNotFoundError = (err: unknown): boolean => {
+  if (err === null || typeof err !== "object") {
+    return false;
+  }
+  const e = err as { status?: unknown; code?: unknown };
+  const status = typeof e.status === "number" ? e.status : undefined;
+  const code = typeof e.code === "string" ? e.code : undefined;
+  if (status !== undefined) {
+    // Any HTTP status present is authoritative: only 404 means "gone".
+    return status === 404;
+  }
+  return code === "itemNotFound";
+};
+
 export class RemoteClient {
   readonly serviceType: "onedrive";
   readonly onedriveClient?: onedrive.WrappedOnedriveClient;
@@ -98,6 +121,11 @@ export class RemoteClient {
       password,
       remoteEncryptedKey
     );
+  };
+
+  /** Forget one entry in the persisted remote snapshot (per-key delete). */
+  removeFromRemoteSnapshot = async (key: string) => {
+    return await onedrive.removeFromRemoteSnapshot(key);
   };
 
   checkConnectivity = async (callbackFunc?: (err?: unknown) => void) => {
