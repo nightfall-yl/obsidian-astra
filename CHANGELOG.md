@@ -4,14 +4,23 @@
 
 > 说明：本更新日志自 `26.1.1` 起维护。
 
+## [26.3.5-preview] - 2026-11-03
+
+> 发布于 26.3.4 tag 之后的补充改动。
+
+### 性能
+- **远端快照迁出 data.json**：`settings.sync.onedriveConfig.remoteSnapshot`（约 1,600+ 路径的 OneDrive delta 续传快照）搬到 IndexedDB `astra-sync-db` 的独立 object store `remoteSnapshot`（keyPath=`key`，库版本 1→2）。首次启动自动写 IDB、删内存字段、一次 saveSettings 落盘；幂等标记 `remoteSnapshotMigrated`。IDB 读失败时一律降级为空快照，同步走全量枚举不抛异常。`deltaLink`（小字符串）仍留 settings
+- **activity 裁剪**：写作用量记录（`activity`）首次有了裁剪逻辑——保留窗口 `max(activityHistoryDays + 30, 400)` 天，scan 末尾一次性删除超窗口旧日期；同时收敛历史遗留的 `paths` 重复项。裁剪逻辑抽成纯函数 `pruneActivityRecords` 可独立单测
+- **热力图复用 scan 归组结果**：热力图改为直接读 stats.scan() 已经完成的全库按 mtime 归组结果 `dailyNoteCounts`，消除每次刷新时的第二次全库遍历；约 5000 文件量级可省 ~11ms/次刷新（估算值）。仅 FILE_MTIME 模式走新路径，FILE_CTIME / FILE_NAME / PAGE_PROPERTY 三种模式保持原遍历逻辑
+- **删除停用的指标卡片 UI 代码**：此前用 `void this.renderMetrics` 禁用的 4 个统计大卡片（`renderMetrics` / `createMetricCard` / `noteDetail`）及其全套 CSS（`.astra-metrics` ~45 行）、i18n key（`dv.stats.*` × 6）一次性清除；数据层暂保留
+
 ## [26.3.4] - 2026-11-03
 
 ### 调整
 - **同步状态栏：显示百分比**：同步进行中从 `5/156` 改为 `5/156（3%）`，中文/英文同步更新
-- **同步状态栏文案精简**：去掉冒号分隔符与末尾省略号，`OneDrive：获取远端文件列表…` → `OneDrive 获取远端文件列表`
-- **自动同步触发时机收敛**：设置页 Vault Sync 保留两项——
-  - 「自动同步」(`autoRunEveryMilliseconds`，单下拉四档：不设置 / 每 5 分钟 / 每 10 分钟 / 每 30 分钟；非「不设置」时启动后 5 秒先跑一次) 与「保存后同步延迟」(`syncOnSaveEnabled`，布尔开关，文件保存后固定 5 秒触发)；同时删除「启动后自动运行一次」(`initRunAfterMilliseconds`) 
-  - 两者由统一调度器 `SyncAutoScheduler`（含可测试纯函数 `computeScheduledRunTime`）承接原先三个定时器的职责；任意两次自动同步之间强制最小间隔 30s（手动同步不受此限制）
+- **自动同步触发时机收敛**：设置页 Vault Sync 保留两项，统一调度器 `SyncAutoScheduler`（含可测试纯函数 `computeScheduledRunTime`）承接原先三个定时器的职责；任意两次自动同步之间强制最小间隔 30s（手动同步不受此限制）
+  - 「自动同步」(`autoRunEveryMilliseconds`，单下拉四档：不设置 / 每 5 分钟 / 每 10 分钟 / 每 30 分钟；非「不设置」时启动后 5 秒先跑一次)
+  - 「保存后同步延迟」(`syncOnSaveEnabled`，布尔开关，文件保存后固定 5 秒触发)；同时删除「启动后自动运行一次」(`initRunAfterMilliseconds`)
 - **旧配置兼容**：`syncOnSaveAfterMilliseconds > 0` 自动映射为新布尔开关 true，用户显式设置的新字段优先；`autoRunEveryMilliseconds` 非四档值（如 1min / 15min）在 `normalizeSyncSettings` 中按最近差值映射到合法档位；两个废弃字段在归一化时被显式删除，用户已保存的数值不会误被解释为开启
 
 ### 修复

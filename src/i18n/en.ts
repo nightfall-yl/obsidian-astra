@@ -1,9 +1,6 @@
 export default {
   "dv.empty": "No data",
   "dv.emptyTask": "No tasks",
-  "dv.stats.title": "Vault Overview",
-  "dv.stats.noteCount": "{n} notes total",
-  "dv.stats.totalWords": "{n} words total",
   "dv.fileNotFound": "File not found: {path}",
   "dv.scanning": "Scanning vault…",
   "dv.scanningTip": "First scan may take a few seconds.",

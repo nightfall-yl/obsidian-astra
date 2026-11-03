@@ -10,7 +10,6 @@ import { parseDailyPhrases, type PhraseItem } from "./daily-phrase/parser";
 import type {
   DashboardSnapshot,
   HeatmapSettings,
-  NoteMetric,
   QuickLink
 } from "./models";
 import { QuickLinkModal, quickLinkInitial } from "./quick-link-modal";
@@ -448,8 +447,6 @@ export class AstraDashboardView extends ItemView {
     const body = this.ensureDashboardRoot(snapshot);
 
     this.renderQuickLinks(body);
-    // 指标卡片（4 个统计大卡片）按用户要求暂不显示，代码保留备用，不执行
-    void this.renderMetrics;
 
     // 热力图固定独占一行（副标题位 = 热图窗口文案「近 N 周」）
     const activitySurface = this.createSurface(body, "写作活动", "");
@@ -462,7 +459,7 @@ export class AstraDashboardView extends ItemView {
     );
     if (this.hmSubtitleEl) this.hmSubtitleEl.setText($t("dv.heatmap.subtitle", { n: 52 }));
     this.addHeatmapSettingsButton(activitySurface);
-    this.renderHeatmap(activitySurface);
+    this.renderHeatmap(activitySurface, snapshot);
 
     // 主页模块卡片：顺序/显隐/增删由 homeModuleOrder 驱动（拖拽排序/删除/添加持久化）
     const modulesWrap = body.createDiv("astra-modules-wrap");
@@ -543,70 +540,6 @@ export class AstraDashboardView extends ItemView {
     }
   }
 
-  private renderMetrics(root: HTMLElement, snapshot: DashboardSnapshot): void {
-    const metrics = root.createDiv("astra-metrics");
-    this.createMetricCard(
-      metrics,
-      "files",
-      formatCompactNumber(snapshot.noteCount),
-      "笔记",
-      "accent-blue",
-      () =>
-        this.openDetails(
-          "全部笔记",
-          "按最近修改时间排序",
-          [...snapshot.notes]
-            .sort((a, b) => b.file.stat.mtime - a.file.stat.mtime)
-            .map((note) => noteDetail(note, `${note.words} 字`))
-        )
-    );
-    this.createMetricCard(
-      metrics,
-      "type",
-      formatCompactNumber(snapshot.totalWords),
-      "总字数",
-      "accent-green",
-      () =>
-        this.openDetails(
-          "字数明细",
-          "中文字符与其他语言词组按可读文本统计",
-          [...snapshot.notes]
-            .sort((a, b) => b.words - a.words)
-            .map((note) => noteDetail(note, `${note.words} 字`))
-        )
-    );
-    this.createMetricCard(
-      metrics,
-      "link",
-      formatCompactNumber(snapshot.unlinkedNotes.length),
-      "待连接",
-      "accent-yellow",
-      () =>
-        this.openDetails(
-          "无反向链接笔记",
-          "这些笔记尚未被其他笔记引用",
-          snapshot.unlinkedNotes.map((note) =>
-            noteDetail(note, `${note.outgoingLinks} 个出链`)
-          )
-        )
-    );
-    this.createMetricCard(
-      metrics,
-      "file-warning",
-      formatCompactNumber(snapshot.shortNotes.length),
-      "空白或极短",
-      "accent-purple",
-      () =>
-        this.openDetails(
-          "空白或极短笔记",
-          `当前阈值：不超过 ${this.plugin.data.settings.shortNoteWordThreshold} 字`,
-          snapshot.shortNotes.map((note) =>
-            noteDetail(note, `${note.words} 字`)
-          )
-        )
-    );
-  }
-
   private addHeatmapSettingsButton(surface: HTMLElement): void {
     const header = surface.querySelector<HTMLElement>(".astra-surface-header");
     if (!header) return;
@@ -621,11 +554,11 @@ export class AstraDashboardView extends ItemView {
   // 一年（1月1日→12月31日）全部数据一次性渲染，再由 layoutHeatmap 按实际宽度
   // 决定展示最近几周；格子尺寸恒为 HM_CELL(15px) 只调间距，物理屏幕越宽 Cell 间隔越宽。
   // 数据按 astra 弹窗的「日期字段」设置统计每日笔记数，主题为 GitHub 绿。
-  private renderHeatmap(surface: HTMLElement): void {
+  private renderHeatmap(surface: HTMLElement, snapshot: DashboardSnapshot): void {
     const card = surface.createDiv("astra-heatmap-wrapper ad-ns");
     this.heatmapCard = card;
 
-    const noteCounts = this.getHeatmapNoteCounts();
+    const noteCounts = this.getHeatmapNoteCounts(snapshot);
     const today = new Date();
     const todayTime = today.getTime();
     const todayKey = fmtDate(today);
@@ -809,9 +742,20 @@ export class AstraDashboardView extends ItemView {
     }
   }
 
-  /** 按弹窗「日期字段」设置，统计每日笔记数（YYYY-MM-DD -> count） */
-  private getHeatmapNoteCounts(): Map<string, number> {
+  /** 每日笔记数：优先复用 scan 的全库按 mtime 归组结果，避免每次渲染再做一次全库遍历。
+   *  非 mtime 模式（FILE_CTIME / FILE_NAME / PAGE_PROPERTY）走原全库遍历路径，行为不变。 */
+  private getHeatmapNoteCounts(snapshot?: DashboardSnapshot): Map<string, number> {
     const settings = this.plugin.data.settings.heatmap;
+    // 只有 mtime 模式（默认）才尝试复用 scan 结果
+    if (settings.dateFieldType === "FILE_MTIME" && snapshot?.dailyNoteCounts) {
+      const counts = new Map<string, number>();
+      for (const [date, n] of Object.entries(snapshot.dailyNoteCounts)) {
+        if (n > 0) counts.set(date, n);
+      }
+      return counts;
+    }
+
+    // 原全库遍历路径（FILE_CTIME / FILE_NAME / PAGE_PROPERTY / snapshot 缺失时 fallback）
     const counts = new Map<string, number>();
     const files = this.app.vault.getMarkdownFiles();
     for (const file of files) {
@@ -2555,28 +2499,6 @@ export class AstraDashboardView extends ItemView {
     return surface;
   }
 
-  private createMetricCard(
-    parent: HTMLElement,
-    iconName: string,
-    value: string,
-    label: string,
-    colorClass: string,
-    onClick: () => void
-  ): void {
-    const button = parent.createEl("button", {
-      cls: `astra-metric ${colorClass}`,
-      attr: { type: "button", "aria-label": `${label}：${value}` }
-    });
-    const icon = button.createSpan("astra-metric-icon");
-    setIcon(icon, iconName);
-    const copy = button.createSpan("astra-metric-copy");
-    copy.createSpan({ cls: "astra-metric-value", text: value });
-    copy.createSpan({ cls: "astra-metric-label", text: label });
-    const arrow = button.createSpan("astra-row-arrow");
-    setIcon(arrow, "chevron-right");
-    this.listen(button, "click", onClick);
-  }
-
   private createIconButton(
     parent: HTMLElement,
     iconName: string,
@@ -2629,15 +2551,6 @@ export class AstraDashboardView extends ItemView {
     this.heatmapCard = null;
     this.hmSubtitleEl = null;
   }
-}
-
-function noteDetail(note: NoteMetric, badge?: string): DetailItem {
-  return {
-    file: note.file,
-    title: note.file.basename,
-    subtitle: note.file.path,
-    badge
-  };
 }
 
 function greeting(now = new Date()): string {

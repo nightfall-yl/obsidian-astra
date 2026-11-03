@@ -29,6 +29,11 @@ import {
   mkdirpInVault,
 } from "./misc";
 import { syncLog } from "./log";
+import {
+  remoteSnapshotClear,
+  remoteSnapshotLoadAll,
+  remoteSnapshotSaveAll
+} from "./idb";
 
 const SCOPES = ["User.Read", "Files.ReadWrite.AppFolder", "offline_access"];
 const REDIRECT_URI = `obsidian://${COMMAND_CALLBACK_ONEDRIVE}`;
@@ -801,10 +806,12 @@ export const listFromRemote = async (
   const NEXT_LINK_KEY = "@odata.nextLink";
   const DELTA_LINK_KEY = "@odata.deltaLink";
 
+  // 从 IndexedDB 读远端快照（如果库尚未创建或读失败，返回 {} 降级为全量枚举）
+  const idbSnapshot = await remoteSnapshotLoadAll<RemoteItem>();
+
   const tryDeltaResume =
     !!client.onedriveConfig.deltaLink &&
-    !!client.onedriveConfig.remoteSnapshot &&
-    Object.keys(client.onedriveConfig.remoteSnapshot).length > 0;
+    Object.keys(idbSnapshot).length > 0;
 
   let items: GraphDriveItem[] = [];
   let newDeltaLink = "";
@@ -833,7 +840,7 @@ export const listFromRemote = async (
         `deltaLink 续传失败，回退全量枚举：${err instanceof Error ? err.message : String(err)}`
       );
       client.onedriveConfig.deltaLink = "";
-      client.onedriveConfig.remoteSnapshot = undefined;
+      await remoteSnapshotClear();
       await client.saveUpdatedConfigFunc();
       usedFullEnumeration = true;
     }
@@ -853,9 +860,8 @@ export const listFromRemote = async (
     deleted: (item as Record<string, unknown>).deleted !== undefined,
   }));
 
-  // ── 合并到快照 ──
-  let snapshot: Record<string, RemoteItem> =
-    client.onedriveConfig.remoteSnapshot ?? {};
+  // ── 合并到快照（从 IDB 读入，浅拷贝避免回写污染原始引用） ──
+  let snapshot: Record<string, RemoteItem> = { ...idbSnapshot };
 
   for (const entry of entries) {
     // 已删项：从快照中移除（即使 fromDriveItemToRemoteItem 失败也不影响删除判断）
@@ -906,24 +912,22 @@ export const listFromRemote = async (
   }
 
   // ── 脏检查：只有 snapshot 或 deltaLink 真正变化时才持久化 ──
-  const oldSnapshot = client.onedriveConfig.remoteSnapshot ?? {};
   const snapshotChanged =
-    Object.keys(oldSnapshot).length !== Object.keys(snapshot).length ||
+    Object.keys(idbSnapshot).length !== Object.keys(snapshot).length ||
     Object.keys(snapshot).some(
       (key) =>
-        JSON.stringify(oldSnapshot[key]) !== JSON.stringify(snapshot[key])
+        JSON.stringify(idbSnapshot[key]) !== JSON.stringify(snapshot[key])
     );
   const deltaLinkChanged =
     !!newDeltaLink && newDeltaLink !== client.onedriveConfig.deltaLink;
 
+  // 快照 → IndexedDB（data.json 不再承载这份 ~367KB 的数据）
   if (snapshotChanged) {
-    client.onedriveConfig.remoteSnapshot = snapshot;
+    await remoteSnapshotSaveAll(snapshot);
   }
+  // deltaLink（小字符串）→ 仍走 settings.sync，saveUpdatedConfigFunc 会写 data.json
   if (deltaLinkChanged) {
     client.onedriveConfig.deltaLink = newDeltaLink;
-  }
-
-  if (snapshotChanged || deltaLinkChanged) {
     await client.saveUpdatedConfigFunc();
   }
 

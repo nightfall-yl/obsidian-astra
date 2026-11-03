@@ -8,6 +8,13 @@
  * name, which preserves the same per-table key namespaces with ~80 lines
  * and zero npm dependencies.
  *
+ * DB version history:
+ *   1 — original, single "kv" object store (no keyPath, no indexes).
+ *       Stores all sync tables via key prefix (schemaversion, filefolderoperationhistory, etc.).
+ *   2 — adds dedicated "remoteSnapshot" object store with keyPath="key".
+ *       Used by the OneDrive remote snapshot to move ~367KB of delta resume
+ *       data out of data.json. Existing "kv" store untouched.
+ *
  * Migration note (26.3.3-preview): the IndexedDB database was renamed from
  * "astral-trek-sync-db" to "astra-sync-db" so that all brand identifiers on
  * the storage side converge to "astra". `runMigrationIfNeeded()` below runs
@@ -18,7 +25,9 @@
 
 const DB_NAME = "astra-sync-db";
 const OLD_DB_NAME = "astral-trek-sync-db";
-const STORE_NAME = "kv";
+const KV_STORE_NAME = "kv";
+export const REMOTE_SNAPSHOT_STORE = "remoteSnapshot";
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let migrationPromise: Promise<void> | null = null;
@@ -43,8 +52,8 @@ const runMigrationIfNeeded = (): Promise<void> => {
       if (!oldDb) return; // 旧库不存在，跳过
 
       // 2. 读旧库 kv store 全量
-      const oldTx = oldDb.transaction(STORE_NAME, "readonly");
-      const oldStore = oldTx.objectStore(STORE_NAME);
+      const oldTx = oldDb.transaction(KV_STORE_NAME, "readonly");
+      const oldStore = oldTx.objectStore(KV_STORE_NAME);
       const allKeys = await requestToPromise<IDBValidKey[]>(oldStore.getAllKeys());
       const records: Array<[IDBValidKey, unknown]> = [];
       for (const key of allKeys) {
@@ -59,22 +68,25 @@ const runMigrationIfNeeded = (): Promise<void> => {
         return;
       }
 
-      // 3. 打开新库（onupgradeneeded 会建 kv store，与旧库 schema 一致）
+      // 3. 打开新库（onupgradeneeded 会建 kv + remoteSnapshot store，与当前版本一致）
       const newDb: IDBDatabase = await new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = () => {
           const db = req.result;
-          if (!db.objectStoreNames.contains(STORE_NAME)) {
-            db.createObjectStore(STORE_NAME);
+          if (!db.objectStoreNames.contains(KV_STORE_NAME)) {
+            db.createObjectStore(KV_STORE_NAME);
+          }
+          if (!db.objectStoreNames.contains(REMOTE_SNAPSHOT_STORE)) {
+            db.createObjectStore(REMOTE_SNAPSHOT_STORE, { keyPath: "key" });
           }
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error ?? new Error("open newDB failed"));
       });
 
-      // 4. 写入新库：readwrite tx，逐条 put
-      const writeTx = newDb.transaction(STORE_NAME, "readwrite");
-      const writeStore = writeTx.objectStore(STORE_NAME);
+      // 4. 写入新库：readwrite tx，逐条 put 到 kv store
+      const writeTx = newDb.transaction(KV_STORE_NAME, "readwrite");
+      const writeStore = writeTx.objectStore(KV_STORE_NAME);
       for (const [key, value] of records) {
         writeStore.put(value, key);
       }
@@ -111,11 +123,14 @@ const getDB = async (): Promise<IDBDatabase> => {
 
   if (dbPromise === null) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME);
+        if (!db.objectStoreNames.contains(KV_STORE_NAME)) {
+          db.createObjectStore(KV_STORE_NAME);
+        }
+        if (!db.objectStoreNames.contains(REMOTE_SNAPSHOT_STORE)) {
+          db.createObjectStore(REMOTE_SNAPSHOT_STORE, { keyPath: "key" });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -167,35 +182,35 @@ class IdbKvStore implements KvStore {
 
   getItem = async <T>(key: string): Promise<T | null> => {
     const db = await getDB();
-    const tx = db.transaction(STORE_NAME, "readonly");
+    const tx = db.transaction(KV_STORE_NAME, "readonly");
     const res = await requestToPromise<unknown>(
-      tx.objectStore(STORE_NAME).get(this.fullKey(key))
+      tx.objectStore(KV_STORE_NAME).get(this.fullKey(key))
     );
     return (res ?? null) as T | null;
   };
 
   setItem = async <T>(key: string, value: T): Promise<T> => {
     const db = await getDB();
-    const tx = db.transaction(STORE_NAME, "readwrite");
+    const tx = db.transaction(KV_STORE_NAME, "readwrite");
     await requestToPromise(
-      tx.objectStore(STORE_NAME).put(value as unknown, this.fullKey(key))
+      tx.objectStore(KV_STORE_NAME).put(value as unknown, this.fullKey(key))
     );
     return value;
   };
 
   removeItem = async (key: string): Promise<void> => {
     const db = await getDB();
-    const tx = db.transaction(STORE_NAME, "readwrite");
+    const tx = db.transaction(KV_STORE_NAME, "readwrite");
     await requestToPromise(
-      tx.objectStore(STORE_NAME).delete(this.fullKey(key))
+      tx.objectStore(KV_STORE_NAME).delete(this.fullKey(key))
     );
   };
 
   keys = async (): Promise<string[]> => {
     const db = await getDB();
-    const tx = db.transaction(STORE_NAME, "readonly");
+    const tx = db.transaction(KV_STORE_NAME, "readonly");
     const allKeys = await requestToPromise(
-      tx.objectStore(STORE_NAME).getAllKeys()
+      tx.objectStore(KV_STORE_NAME).getAllKeys()
     );
     const res: string[] = [];
     for (const k of allKeys) {
@@ -210,9 +225,9 @@ class IdbKvStore implements KvStore {
     iterator: (value: unknown, key: string, iterationNumber: number) => void
   ): Promise<void> => {
     const db = await getDB();
-    const tx = db.transaction(STORE_NAME, "readonly");
+    const tx = db.transaction(KV_STORE_NAME, "readonly");
     const allKeys = await requestToPromise(
-      tx.objectStore(STORE_NAME).getAllKeys()
+      tx.objectStore(KV_STORE_NAME).getAllKeys()
     );
     let iterationNumber = 0;
     for (const k of allKeys) {
@@ -220,7 +235,7 @@ class IdbKvStore implements KvStore {
         continue;
       }
       const value = await requestToPromise<unknown>(
-        db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(k)
+        db.transaction(KV_STORE_NAME, "readonly").objectStore(KV_STORE_NAME).get(k)
       );
       iterator(value, this.stripPrefix(k), iterationNumber);
       iterationNumber += 1;
@@ -229,12 +244,12 @@ class IdbKvStore implements KvStore {
 
   clear = async (): Promise<void> => {
     const db = await getDB();
-    const tx = db.transaction(STORE_NAME, "readwrite");
+    const tx = db.transaction(KV_STORE_NAME, "readwrite");
     const allKeys = await requestToPromise(
-      tx.objectStore(STORE_NAME).getAllKeys()
+      tx.objectStore(KV_STORE_NAME).getAllKeys()
     );
-    const writeTx = db.transaction(STORE_NAME, "readwrite");
-    const store = writeTx.objectStore(STORE_NAME);
+    const writeTx = db.transaction(KV_STORE_NAME, "readwrite");
+    const store = writeTx.objectStore(KV_STORE_NAME);
     for (const k of allKeys) {
       if (typeof k === "string" && k.startsWith(this.prefix)) {
         store.delete(k);
@@ -254,6 +269,77 @@ class IdbKvStore implements KvStore {
 export const createKvStore = (storeName: string): KvStore => {
   return new IdbKvStore(storeName);
 };
+
+/**
+ * Direct access to the "remoteSnapshot" object store (DB version 2+).
+ * This store has keyPath="key" (the RemoteItem.path-equivalent property).
+ * Used by the OneDrive delta API to persist the remote file listing snapshot
+ * out of data.json.
+ *
+ * All methods are safe: any IndexedDB error resolves to empty/default values
+ * and a warn-level log, never throws. The caller (listFromRemote) then falls
+ * through to a full enumeration — which is the correct fallback.
+ */
+export async function remoteSnapshotLoadAll<T extends { key: string }>(): Promise<Record<string, T>> {
+  try {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains(REMOTE_SNAPSHOT_STORE)) {
+      return {};
+    }
+    const tx = db.transaction(REMOTE_SNAPSHOT_STORE, "readonly");
+    const items = (await requestToPromise(tx.objectStore(REMOTE_SNAPSHOT_STORE).getAll())) as T[];
+    const result: Record<string, T> = {};
+    for (const item of items) {
+      result[item.key] = item;
+    }
+    return result;
+  } catch (err) {
+    console.warn("[remoteSnapshot] loadAll failed, treating as empty:", err instanceof Error ? err.message : String(err));
+    return {};
+  }
+}
+
+export async function remoteSnapshotSaveAll<T extends { key: string }>(
+  snapshot: Record<string, T>
+): Promise<void> {
+  try {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains(REMOTE_SNAPSHOT_STORE)) {
+      return;
+    }
+    const tx = db.transaction(REMOTE_SNAPSHOT_STORE, "readwrite");
+    const store = tx.objectStore(REMOTE_SNAPSHOT_STORE);
+    // Clear existing then bulk put — simpler than diffing, and snapshots are
+    // entirely rebuilt on every listFromRemote call anyway.
+    await requestToPromise(store.clear());
+    for (const item of Object.values(snapshot)) {
+      store.put(item);
+    }
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("remoteSnapshot save tx failed"));
+    });
+  } catch (err) {
+    console.warn("[remoteSnapshot] saveAll failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+export async function remoteSnapshotClear(): Promise<void> {
+  try {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains(REMOTE_SNAPSHOT_STORE)) {
+      return;
+    }
+    const tx = db.transaction(REMOTE_SNAPSHOT_STORE, "readwrite");
+    await requestToPromise(tx.objectStore(REMOTE_SNAPSHOT_STORE).clear());
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("remoteSnapshot clear tx failed"));
+    });
+  } catch (err) {
+    console.warn("[remoteSnapshot] clear failed:", err instanceof Error ? err.message : String(err));
+  }
+}
 
 /** Drop the whole sync database (used by "wipe local sync data").
  *  Also drops the legacy "astral-trek-sync-db" if it still exists,

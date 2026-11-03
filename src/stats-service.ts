@@ -165,6 +165,16 @@ export class StatsService {
     const modifiedToday = notes.filter(
       (note) => localDateKey(note.file.stat.mtime) === today
     ).length;
+
+    // 热力图复用：全库按 mtime 归组的每日篇数。
+    // 注意：这里遍历的是 performScan 已经过滤好的 notes（全库 .md - excludedFolders），
+    // 与 buildActivity 内部的 notesByMtime 构建逻辑完全同口径，不受 activityHistoryDays 限制。
+    const dailyNoteCounts: Record<string, number> = {};
+    for (const note of notes) {
+      const key = localDateKey(note.file.stat.mtime);
+      dailyNoteCounts[key] = (dailyNoteCounts[key] ?? 0) + 1;
+    }
+
     const activity = this.buildActivity(notes);
     const graph = this.buildKnowledgeGraph(notes);
     this.recordLinkSnapshot(graph.edges.length);
@@ -182,7 +192,8 @@ export class StatsService {
       trend: activity.slice(-30),
       linkHistory: this.buildLinkHistory(notes, graph),
       folders: this.buildFolderSummaries(notes),
-      graph
+      graph,
+      dailyNoteCounts
     };
   }
 
@@ -320,15 +331,26 @@ export class StatsService {
       this.store.data.linkSnapshots[today] = count;
       changed = true;
     }
-    const oldestRetained = dayKeysEndingToday(400)[0];
-    if (oldestRetained) {
+    // 只保留最近 400 天的链接快照（固定窗口，独立于 activityHistoryDays）
+    const snapshotOldestRetained = dayKeysEndingToday(400)[0];
+    if (snapshotOldestRetained) {
       Object.keys(this.store.data.linkSnapshots).forEach((date) => {
-        if (date < oldestRetained) {
+        if (date < snapshotOldestRetained) {
           delete this.store.data.linkSnapshots[date];
           changed = true;
         }
       });
     }
+
+    // activity 裁剪：与 linkSnapshots 同构，保留窗口 = max(activityHistoryDays + 30, 400)
+    // 为什么加 +30：activityHistoryDays 只控制 UI 展示窗口，裁剪窗口应该略宽松，
+    // 避免用户把 activityHistoryDays 设为更大值时发现历史数据已被清掉。
+    const retentionDays = Math.max(
+      (this.store.data.settings.activityHistoryDays ?? 365) + 30,
+      400
+    );
+    changed = pruneActivityRecords(this.store.data.activity, retentionDays) || changed;
+
     if (changed) this.store.requestDataSave();
   }
 
@@ -440,4 +462,34 @@ export function mergeActivityEntry(
       new Set([...(current?.paths ?? []), ...(update.paths ?? [])])
     )
   };
+}
+
+/**
+ * 裁剪 activity 记录 + 收敛 paths 重复项。纯函数，可单测。
+ * 日期 key 为 YYYY-MM-DD 字符串，直接字符串比较即可判定先后。
+ * @returns 是否发生了改动（新增/删除日期 key 或 paths 去重）
+ */
+export function pruneActivityRecords(
+  activity: Record<string, ActivityEntry>,
+  retentionDays: number,
+  now: Date = new Date()
+): boolean {
+  const oldestRetained = dayKeysEndingToday(retentionDays, now)[0];
+  let changed = false;
+  if (oldestRetained) {
+    for (const date of Object.keys(activity)) {
+      if (date < oldestRetained) {
+        delete activity[date];
+        changed = true;
+      }
+    }
+  }
+  for (const entry of Object.values(activity)) {
+    const unique = [...new Set(entry.paths)];
+    if (unique.length < entry.paths.length) {
+      entry.paths = unique;
+      changed = true;
+    }
+  }
+  return changed;
 }

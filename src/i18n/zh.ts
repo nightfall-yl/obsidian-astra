@@ -1,9 +1,6 @@
 export default {
   "dv.empty": "暂无数据",
   "dv.emptyTask": "暂无任务",
-  "dv.stats.title": "知识库概览",
-  "dv.stats.noteCount": "共 {n} 篇笔记",
-  "dv.stats.totalWords": "共 {n} 字",
   "dv.fileNotFound": "未找到文件：{path}",
   "dv.scanning": "正在扫描知识库",
   "dv.scanningTip": "首次统计可能需要几秒钟。",

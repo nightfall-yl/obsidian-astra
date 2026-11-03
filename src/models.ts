@@ -382,6 +382,9 @@ export interface DashboardSnapshot {
   linkHistory: DailyLinkCount[];
   folders: FolderSummary[];
   graph: KnowledgeGraphSnapshot;
+  /** 全库按 mtime 归组的每日篇数（热力图复用）。由 performScan 填充，
+   *  覆盖整个 vault 所有文件，不受 activityHistoryDays 限制。 */
+  dailyNoteCounts?: Record<string, number>;
 }
 
 export interface AstraDataStore {

@@ -25,13 +25,16 @@ import type {
   SyncDirectionType,
   SyncTriggerSourceType,
 } from "./baseTypes";
-import { COMMAND_CALLBACK_ONEDRIVE } from "./baseTypes";
+import { COMMAND_CALLBACK_ONEDRIVE, applyRemoteSnapshotMigration } from "./baseTypes";
 import {
   getAuthUrlAndVerifier,
   sendAuthReq,
   setConfigBySuccessfullAuthInplace,
 } from "./remoteForOnedrive";
 import { RemoteClient } from "./remote";
+import {
+  remoteSnapshotSaveAll
+} from "./idb";
 import type { InternalDBs } from "./localdb";
 import {
   clearAllPrevSyncRecordsByVault,
@@ -185,6 +188,10 @@ export class SyncManager {
       syncLog.error("prepareDBs failed", err);
     }
 
+    // ── 一次性迁移：remoteSnapshot 从 data.json 搬到 IndexedDB ──
+    // 标记位保证只跑一次；已迁移用户的数据不再含 remoteSnapshot。
+    await this.migrateRemoteSnapshotToIDB();
+
     this.applyEnabled();
 
     // 状态栏相对时间每 30s 刷新（同步中让位于实时步骤显示；对齐上游）
@@ -223,6 +230,43 @@ export class SyncManager {
     return () => {
       this.statusListeners.delete(listener);
     };
+  }
+
+  /**
+   * 一次性迁移：把 settings.sync.onedriveConfig.remoteSnapshot（~367KB）
+   * 从 data.json 搬到 IndexedDB 的 dedicated "remoteSnapshot" store。
+   * 幂等：标记位 remoteSnapshotMigrated 在 onedriveConfig 上，迁移后写入 data.json；
+   *       重复启动时标记已存在，直接跳过。
+   * 降级安全：任何 IDB 异常被吞掉，remoteSnapshot 字段保留在 data.json，
+   *           不阻塞后续——下次 listFromRemote 会从 IDB 拿到空快照，
+   *           走全量枚举，同步功能不受影响。
+   */
+  private async migrateRemoteSnapshotToIDB(): Promise<void> {
+    try {
+      const odc = this.plugin.data.settings.sync.onedriveConfig;
+      if (!odc) return;
+      if (odc.remoteSnapshotMigrated) return;
+
+      const snapshot = odc.remoteSnapshot;
+      if (snapshot && Object.keys(snapshot).length > 0) {
+        // 先写 IndexedDB，再在内存对象上落迁移标记 + 删字段（由纯函数完成）
+        await remoteSnapshotSaveAll(snapshot as Record<string, { key: string }>);
+      }
+
+      applyRemoteSnapshotMigration(odc as typeof odc & Record<string, unknown>);
+      await this.plugin.saveSettings();
+
+      if (snapshot && Object.keys(snapshot).length > 0) {
+        syncLog.info(
+          `remoteSnapshot 迁移到 IndexedDB 完成（${Object.keys(snapshot).length} 条路径）`
+        );
+      }
+    } catch (err) {
+      syncLog.warn(
+        "remoteSnapshot 迁移到 IndexedDB 失败（降级保留在 data.json）",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
 
   private setStatus(status: SyncStatusType, message?: string): void {

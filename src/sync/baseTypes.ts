@@ -14,12 +14,35 @@ export interface OnedriveConfig {
   accessTokenExpiresInSeconds: number;
   accessTokenExpiresAtTime: number;
   deltaLink: string;
-  /** 上次成功同步时的远端完整快照（key → RemoteItem）。用于 delta 续传时合并增量变化，
-   *  避免每次全量枚举。delta 条目标记为 deleted 的项会从快照中移除。 */
+  /** 已废弃：远端快照已迁移到 IndexedDB（store "remoteSnapshot"），
+   *  保留字段仅为兼容旧版本 data.json，首次加载时会触发一次性迁移并删除。 */
   remoteSnapshot?: Record<string, RemoteItem>;
+  /** 一次性迁移标记：remoteSnapshot 已搬出 data.json，后续不再序列化。 */
+  remoteSnapshotMigrated?: boolean;
   username: string;
   credentialsShouldBeDeletedAtTime?: number;
   remoteBaseDir?: string;
+}
+
+/**
+ * 一次性迁移的纯函数部分：从 OnedriveConfig 对象中移除 remoteSnapshot 字段、
+ * 写入 remoteSnapshotMigrated 标记。不涉及任何 I/O（IDB、saveSettings），
+ * 可独立单测。
+ *
+ * 幂等：已设 remoteSnapshotMigrated=true → 返回 { migrated: false, pathCount: 0 }。
+ * 对快照内容不做深拷贝或验证；调用方在 async 层负责先把快照写入 IDB 再调用本函数。
+ */
+export function applyRemoteSnapshotMigration(
+  odc: OnedriveConfig & Record<string, unknown>
+): { migrated: boolean; pathCount: number } {
+  if (odc.remoteSnapshotMigrated) {
+    return { migrated: false, pathCount: 0 };
+  }
+  const snapshot = odc.remoteSnapshot as Record<string, unknown> | undefined;
+  const pathCount = snapshot ? Object.keys(snapshot).length : 0;
+  delete odc.remoteSnapshot;
+  odc.remoteSnapshotMigrated = true;
+  return { migrated: pathCount > 0, pathCount };
 }
 
 export interface RemoteItem {
