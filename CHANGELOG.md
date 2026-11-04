@@ -15,8 +15,10 @@
 
 ### 修复
 - **OneDrive vault 根目录识别误判**：vault 根目录检测用 `includes("/VaultName")` 子串匹配，当 OneDrive 应用文件夹名恰好以 vault 名开头（如应用文件夹叫 `Obsidian Vault Sync`、vault 名叫 `Obsidian Vault`）时会误判，导致每次同步枚举远端时控制台刷 `skip unrecognized onedrive item` 警告；改为路径段精确匹配（`endsWith` / `includes` 前后均要求 `/` 边界）
-- **删除文件后同步中止（远端快照幽灵条目）**：删除笔记后远端快照未移除对应键，下一轮被判为"远端新增"并下载，遇 HTTP 404 累计 3 条错误后整轮中止，且每轮重复；下载遇 404 现按"远端已不存在"处理，摘除快照键、跳过该条目、不计入错误累计（401/403/429/5xx 与网络错误仍正常报错）
-- **快照键与远端状态不同步**：远端删除成功后立即移除对应快照键，不再等下一轮 delta；全量枚举改为从空快照重建，不再以旧快照为基底
+- **删除文件后同步中止（远端快照幽灵条目）**：删除笔记后远端快照未移除对应键，下一轮被判为"远端新增"，元数据查询或二进制下载遇 HTTP 404，累计 3 条错误后整轮中止且每轮重复；下载链路的两次请求（`downloadFromRemoteRaw` 的元数据查询与内容下载）现都按状态码判断，404 视为"远端已不存在"——摘除快照键、跳过该条目、不计入错误累计（401/403/429/5xx 与网络错误仍正常报错）
+- **快照键与远端状态不同步**：远端删除成功后立即移除对应快照键，不再等下一轮 delta（远端文件已被别处删除时，`deleteJson` 的 404 视为删除达成，清快照键与清删除/改名历史照常执行）；全量枚举改为从空快照重建，不再以旧快照为基底
+- **远端快照未记录 `driveItem.id`**：delta 删除项缺少 `name` / `parentReference` 时整条被跳过，快照残留幽灵键；快照现持久化 `driveItem.id`，删除优先按 id 反查（一次构建 id→键索引）摘除，id 缺失或不匹配才回退路径/文件名，同一文件的明文键与密文键一并移除。旧快照（条目缺 `id`）在下一次同步时清空并全量枚举重建一次，`deltaLink` 保留，重建后条目都带 id，条件不再成立，不退化每轮全量
+- **非 2xx 且响应体无 Graph 错误字段被当成成功**：`oneDriveApiRequest` 只在响应体含 `error` 字段时抛错，其余非 2xx 一律返回 `{}`；元数据 404 会使 `downloadUrl` 取值为空、随后抛出不带状态码的错误并计入熔断，delta 分页则被当成零条目、把快照整体清空。现补 `status >= 400` 兜底，非 2xx 一律抛带状态码的错误，空响应体用状态文本填充
 
 ### 性能
 - **远端快照迁出 data.json**：`settings.sync.onedriveConfig.remoteSnapshot`（约 1,600+ 路径的 OneDrive delta 续传快照）搬到 IndexedDB `astra-sync-db` 的独立 object store `remoteSnapshot`（keyPath=`key`，库版本 1→2）。首次启动自动写 IDB、删内存字段、一次 saveSettings 落盘；幂等标记 `remoteSnapshotMigrated`。IDB 读失败时一律降级为空快照，同步走全量枚举不抛异常。`deltaLink`（小字符串）仍留 settings

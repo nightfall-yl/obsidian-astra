@@ -11,7 +11,11 @@
  */
 
 import type { Vault} from "obsidian";
-import { requestUrl, type RequestUrlParam } from "obsidian";
+import {
+  requestUrl,
+  type RequestUrlParam,
+  type RequestUrlResponse,
+} from "obsidian";
 
 import {
   COMMAND_CALLBACK_ONEDRIVE,
@@ -45,6 +49,7 @@ interface GraphParentReference {
   path?: string;
 }
 interface GraphDriveItem {
+  id?: string;
   parentReference?: GraphParentReference;
   name?: string;
   fileSystemInfo?: { lastModifiedDateTime?: string };
@@ -385,7 +390,7 @@ const extractKeyByRemoteBaseDir = (
   return null;
 };
 
-const fromDriveItemToRemoteItem = (
+export const fromDriveItemToRemoteItem = (
   x: GraphDriveItem,
   remoteBaseDir: string
 ): RemoteItem => {
@@ -425,6 +430,7 @@ const fromDriveItemToRemoteItem = (
       size: 0,
       remoteType: "onedrive",
       etag: x.cTag || "",
+      id: x.id,
     };
   }
 
@@ -478,20 +484,283 @@ const fromDriveItemToRemoteItem = (
     size: isFolder ? 0 : (x.size ?? 0),
     remoteType: "onedrive",
     etag: x.cTag || "", // do NOT use x.eTag because it changes if meta changes
+    // Persisted so a delta delete can be matched by id: deletion entries often
+    // omit name/parentReference, which used to leave a ghost snapshot entry.
+    id: x.id,
   };
 };
 
-// Shared helper for OneDrive Graph API JSON calls.
+/**
+ * Snapshot lookups built in ONE pass over the snapshot, so processing a delta
+ * delete is O(1) instead of an O(n) scan per deleted entry.
+ * - byId: driveItem id → snapshot key(s). A key list (not a single key) covers
+ *   snapshots that hold the same item twice, e.g. a plaintext key left over
+ *   from before encryption was enabled plus the current encrypted key.
+ * - byName: basename → key(s), fallback when the delete entry has no usable id.
+ */
+export interface SnapshotIndex {
+  byId: Map<string, string[]>;
+  byName: Map<string, string[]>;
+}
+
+const baseNameOfSnapshotKey = (key: string): string => {
+  const trimmed = key.endsWith("/") ? key.slice(0, -1) : key;
+  const idx = trimmed.lastIndexOf("/");
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+};
+
+const registerSnapshotKey = (
+  index: SnapshotIndex,
+  key: string,
+  item: RemoteItem
+) => {
+  if (item.id !== undefined && item.id !== "") {
+    const keys = index.byId.get(item.id);
+    if (keys === undefined) {
+      index.byId.set(item.id, [key]);
+    } else if (!keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  const name = baseNameOfSnapshotKey(key);
+  const nameKeys = index.byName.get(name);
+  if (nameKeys === undefined) {
+    index.byName.set(name, [key]);
+  } else if (!nameKeys.includes(key)) {
+    nameKeys.push(key);
+  }
+};
+
+export const buildSnapshotIndex = (
+  snapshot: Record<string, RemoteItem>
+): SnapshotIndex => {
+  const byId = new Map<string, string[]>();
+  const byName = new Map<string, string[]>();
+  const index: SnapshotIndex = { byId, byName };
+  for (const key of Object.keys(snapshot)) {
+    const item = snapshot[key];
+    if (item === undefined) {
+      continue;
+    }
+    registerSnapshotKey(index, key, item);
+  }
+  return index;
+};
+
+/**
+ * True when the snapshot was persisted before `RemoteItem.id` existed.
+ * Such entries cannot be matched by id, so listFromRemote rebuilds the
+ * snapshot once via full enumeration.
+ */
+export const hasLegacySnapshotEntries = (
+  snapshot: Record<string, RemoteItem>
+): boolean => {
+  for (const key of Object.keys(snapshot)) {
+    if (snapshot[key]?.id === undefined) {
+      return true;
+    }
+  }
+  return false;
+};
+
+export interface DeletedRemoteItemLike {
+  id?: string;
+  name?: string;
+  parentReference?: { path?: string };
+}
+
+/**
+ * Remove the snapshot entry (or entries) a delta deletion refers to.
+ * Strategy: id first (survives missing name/parentReference), then the legacy
+ * name/path fallback. Returns how many keys were removed.
+ */
+export const removeSnapshotEntriesForDeletedItem = (
+  snapshot: Record<string, RemoteItem>,
+  index: SnapshotIndex,
+  item: DeletedRemoteItemLike,
+  remoteBaseDir: string
+): number => {
+  // 1) id — the only field a delta deletion is guaranteed to carry.
+  if (item.id !== undefined && item.id !== "") {
+    const keys = index.byId.get(item.id);
+    if (keys !== undefined && keys.length > 0) {
+      let removed = 0;
+      for (const key of keys) {
+        // Only drop entries that still describe this id: the index may hold a
+        // stale mapping if the path was deleted and recreated under a new id.
+        if (snapshot[key]?.id === item.id) {
+          delete snapshot[key];
+          removed += 1;
+        }
+      }
+      if (removed > 0) {
+        return removed;
+      }
+    }
+  }
+
+  // 2) fallback — exact path-derived key, then basename lookup (one-pass index,
+  // no per-item scan of the whole snapshot).
+  let removed = 0;
+  try {
+    const deletedItem = fromDriveItemToRemoteItem(
+      item,
+      remoteBaseDir
+    );
+    if (
+      deletedItem.key !== "/" &&
+      snapshot[deletedItem.key] !== undefined
+    ) {
+      delete snapshot[deletedItem.key];
+      removed += 1;
+    }
+  } catch {
+    // incomplete metadata (e.g. no name/parentReference): basename below
+  }
+  if (removed > 0) {
+    return removed;
+  }
+
+  const name = item.name;
+  if (name === undefined) {
+    return 0;
+  }
+  const keys = index.byName.get(name);
+  if (keys === undefined) {
+    return 0;
+  }
+  for (const key of keys) {
+    if (snapshot[key] !== undefined) {
+      delete snapshot[key];
+      removed += 1;
+    }
+  }
+  return removed;
+};
+
+/** 2xx is a usable response. */
+export const isHttpSuccessStatus = (status: number): boolean => {
+  return status >= 200 && status < 300;
+};
+
+/** 404 means the addressed remote item no longer exists. */
+export const isHttpNotFoundStatus = (status: number): boolean => {
+  return status === 404;
+};
+
+/**
+ * A DELETE that answers 2xx or 404 has reached its goal: 404 means the item is
+ * already gone, which is exactly the state the caller wanted.
+ */
+export const isDeleteResponseDone = (status: number): boolean => {
+  return isHttpSuccessStatus(status) || isHttpNotFoundStatus(status);
+};
+
+/**
+ * Safely parse a response body. Never throws: `RequestUrlResponse.json` may be a
+ * lazy getter that raises `SyntaxError` on non-JSON bodies (HTML error pages,
+ * empty 404), so error paths must parse `resp.text` themselves.
+ * Returns undefined when the body is empty, invalid JSON, or not an object.
+ */
+export const parseJsonBodySafe = (
+  rawText: unknown
+): Record<string, unknown> | undefined => {
+  if (typeof rawText !== "string" || rawText === "") {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(rawText);
+    return parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Build the shared Onedrive error shape: human-readable message plus the
+ * machine-readable `status` / `code` fields that `isRemoteItemNotFoundError`
+ * relies on. Takes the raw response text (never `resp.json`, which may throw);
+ * body parse failures only affect `code`, never `status`.
+ */
+export const buildRemoteApiError = (
+  method: string,
+  theUrl: string,
+  status: number,
+  rawText: unknown,
+  detail: string = ""
+): Error & { status?: number; code?: string } => {
+  const parsed = parseJsonBodySafe(rawText);
+  const raw =
+    typeof rawText === "string" ? rawText : JSON.stringify(rawText ?? {});
+  const apiError = Error(
+    `OneDrive API ${method} ${theUrl} 失败 (HTTP ${status}): ${
+      detail || "无解析详情"
+    }\nRAW BODY: ${raw}`
+  ) as Error & { status?: number; code?: string };
+  apiError.status = status;
+  const graphErr = parsed?.error as Record<string, unknown> | undefined;
+  if (graphErr !== undefined && typeof graphErr.code === "string") {
+    apiError.code = graphErr.code;
+  }
+  return apiError;
+};
+
+/** Human-readable fallback for a non-2xx response that carries no error body. */
+export const httpStatusText = (status: number): string => {
+  switch (status) {
+    case 400:
+      return "Bad Request";
+    case 401:
+      return "Unauthorized";
+    case 403:
+      return "Forbidden";
+    case 404:
+      return "Not Found";
+    case 409:
+      return "Conflict";
+    case 410:
+      return "Gone";
+    case 429:
+      return "Too Many Requests";
+    case 500:
+      return "Internal Server Error";
+    case 502:
+      return "Bad Gateway";
+    case 503:
+      return "Service Unavailable";
+    case 504:
+      return "Gateway Timeout";
+    default:
+      return `HTTP ${status}`;
+  }
+};
+
+/**
+ * True when a non-2xx response must be treated as an API failure even if the
+ * body has no Graph error fields (empty body, HTML error page, proxy 502 …).
+ * Mirrors the upstream 26.2.8 guard: such responses used to fall through and
+ * return `{}`, which callers could silently interpret as "no data".
+ */
+export const isBareErrorStatus = (status: number): boolean => {
+  return status >= 400;
+};
+
 // Uses `throw: false` so a non-2xx response (e.g. HTTP 400) is returned instead
 // of being swallowed by an opaque RequestUrlError, then surfaces the real Graph
 // error code/message + HTTP status.
-const oneDriveApiRequest = async (
+// `requester` is injectable for unit tests; production always uses requestUrl.
+export const oneDriveApiRequest = async (
   method: string,
   theUrl: string,
   headers: Record<string, string>,
-  body?: string
+  body?: string,
+  requester: (
+    param: RequestUrlParam
+  ) => Promise<RequestUrlResponse> = requestUrl
 ): Promise<Record<string, unknown>> => {
-  const resp = await requestUrl({
+  const resp = await requester({
     url: theUrl,
     method,
     contentType: "application/json",
@@ -499,8 +768,10 @@ const oneDriveApiRequest = async (
     headers,
     ...(body !== undefined ? { body } : {}),
   });
-  const rawJson: unknown = resp.json;
-  const json = (rawJson ?? {}) as Record<string, unknown>;
+  // Never touch `resp.json` here: it is a lazy getter and throws SyntaxError on
+  // non-JSON bodies before our own status guard can run.
+  const rawText: unknown = resp.text;
+  const json = (parseJsonBodySafe(rawText) ?? {});
   const o = json as {
     error?: unknown;
     error_description?: string;
@@ -544,23 +815,24 @@ const oneDriveApiRequest = async (
     }
     // Always append the RAW response body so any detail we failed to parse
     // (e.g. innerError under a different key, or non-JSON payload) is visible.
-    const rawText: unknown = resp.text;
-    const raw =
-      typeof rawText === "string" ? rawText : JSON.stringify(json);
-    const apiError = Error(
-      `OneDrive API ${method} ${theUrl} 失败 (HTTP ${resp.status}): ${
-        detail || "无解析详情"
-      }\nRAW BODY: ${raw}`
-    ) as Error & { status?: number; code?: string };
-    // Attach machine-readable metadata so callers can distinguish "the item is
-    // gone" (404/itemNotFound) from auth/throttling/server/network failures
-    // without parsing the human-readable message.
-    apiError.status = resp.status;
-    const graphErr = json.error as Record<string, unknown> | undefined;
-    if (graphErr !== undefined && typeof graphErr.code === "string") {
-      apiError.code = graphErr.code;
-    }
-    throw apiError;
+    throw buildRemoteApiError(
+      method,
+      theUrl,
+      resp.status,
+      rawText,
+      detail
+    );
+  }
+  // 非 2xx 但没有 Graph 错误体（空 body / HTML 错误页 / 网关 502）也要抛错，
+  // 并带上 status，否则会静默返回 {} 被调用方当成“无数据”。
+  if (isBareErrorStatus(resp.status)) {
+    throw buildRemoteApiError(
+      method,
+      theUrl,
+      resp.status,
+      rawText,
+      httpStatusText(resp.status)
+    );
   }
   return json;
 };
@@ -713,13 +985,30 @@ export class WrappedOnedriveClient {
   deleteJson = async (pathFragOrig: string) => {
     const theUrl = this.buildUrl(pathFragOrig);
     syncLog.debug(`deleteJson, theUrl=${theUrl}`);
-    await requestUrl({
+    // `throw: false`: a 404 (item already gone) must be reported as success,
+    // not as an opaque `Request failed, status 404`.
+    const resp = await requestUrl({
       url: theUrl,
       method: "DELETE",
+      throw: false,
       headers: {
         Authorization: `Bearer ${await this.authGetter.getAccessToken()}`,
       },
     });
+    if (isDeleteResponseDone(resp.status)) {
+      if (isHttpNotFoundStatus(resp.status)) {
+        syncLog.debug(
+          `deleteJson: remote item already absent (HTTP 404), nothing to do: ${theUrl}`
+        );
+      }
+      return;
+    }
+    throw buildRemoteApiError(
+      "DELETE",
+      theUrl,
+      resp.status,
+      resp.text
+    );
   };
 
   putArrayBuffer = async (pathFragOrig: string, payload: ArrayBuffer) => {
@@ -825,6 +1114,17 @@ export const listFromRemote = async (
   // 从 IndexedDB 读远端快照（如果库尚未创建或读失败，返回 {} 降级为全量枚举）
   let idbSnapshot = await remoteSnapshotLoadAll<RemoteItem>();
 
+  // 旧快照（条目缺 driveItem.id）无法按 id 匹配删除项：清空一次并强制全量
+  // 枚举重建，让 id 落库。deltaLink 保留，重建后仍走增量续传；因为全量枚举
+  // 写入的条目都带 id，后续不会再触发（只在“存在缺 id 条目”时为真）。
+  if (hasLegacySnapshotEntries(idbSnapshot)) {
+    syncLog.debug(
+      `remote snapshot has entries without driveItem id, rebuild once via full enumeration`
+    );
+    await remoteSnapshotClear();
+    idbSnapshot = {};
+  }
+
   const tryDeltaResume =
     !!client.onedriveConfig.deltaLink &&
     Object.keys(idbSnapshot).length > 0;
@@ -887,30 +1187,20 @@ export const listFromRemote = async (
     ? {}
     : { ...idbSnapshot };
 
+  // id→key 反向索引：只遍历快照一次（O(n)），之后每个删除项 O(1) 命中，
+  // 避免“每个删除项都全表扫一遍”的 O(n*m)。
+  const snapshotIndex = buildSnapshotIndex(snapshot);
+
   for (const entry of entries) {
-    // 已删项：从快照中移除（即使 fromDriveItemToRemoteItem 失败也不影响删除判断）
+    // 已删项：优先按 driveItem.id 移除（delta 删除项常常不带 name/parentReference，
+    // 以前这种条目会被整条跳过，留下幽灵键），id 不可用再回退 name/path。
     if (entry.deleted) {
-      const name = entry.item.name;
-      const parentPath = entry.item.parentReference?.path;
-      if (name !== undefined && parentPath !== undefined) {
-        try {
-          const deletedItem = fromDriveItemToRemoteItem(
-            entry.item,
-            client.remoteBaseDir
-          );
-          if (deletedItem.key !== "/") {
-            delete snapshot[deletedItem.key];
-          }
-        } catch {
-          // 元数据不完整：尝试按路径后缀在快照里反查
-          for (const key of Object.keys(snapshot)) {
-            if (key.endsWith(`/${name}`) || key === `/${name}`) {
-              delete snapshot[key];
-              break;
-            }
-          }
-        }
-      }
+      removeSnapshotEntriesForDeletedItem(
+        snapshot,
+        snapshotIndex,
+        entry.item,
+        client.remoteBaseDir
+      );
       continue;
     }
 
@@ -921,6 +1211,8 @@ export const listFromRemote = async (
       );
       if (remoteItem.key !== "/") {
         snapshot[remoteItem.key] = remoteItem;
+        // 同一批 delta 里“新增后又被删除”的条目也能被后续删除项命中。
+        registerSnapshotKey(snapshotIndex, remoteItem.key, remoteItem);
       }
     } catch (err) {
       syncLog.warn(
@@ -1123,13 +1415,21 @@ const downloadFromRemoteRaw = async (
   const key = getOnedrivePath(fileOrFolderPath, client.remoteBaseDir);
   const rsp = await client.getJson(`${key}?$select=@microsoft.graph.downloadUrl`);
   const downloadUrl = rsp["@microsoft.graph.downloadUrl"] as string;
-  const content = (
-    await requestUrl({
-      url: downloadUrl,
-      headers: { "Cache-Control": "no-cache" },
-    })
-  ).arrayBuffer;
-  return content;
+  // `throw: false`: requestUrl would otherwise throw `Request failed, status
+  // 404`, an error without `status`/`code`, which the sync engine cannot tell
+  // apart from auth/throttling failures. Report it in the same shape as
+  // oneDriveApiRequest so a gone item (404/itemNotFound) is recognised.
+  const resp = await requestUrl({
+    url: downloadUrl,
+    headers: { "Cache-Control": "no-cache" },
+    throw: false,
+  });
+  if (!isHttpSuccessStatus(resp.status)) {
+    // Use the approot path (not the signed download URL) in the message so the
+    // notice/log stays readable and no temporary token leaks into it.
+    throw buildRemoteApiError("GET", key, resp.status, resp.text);
+  }
+  return resp.arrayBuffer;
 };
 
 export const downloadFromRemote = async (

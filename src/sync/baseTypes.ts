@@ -51,6 +51,9 @@ export interface RemoteItem {
   size: number;
   remoteType: "onedrive";
   etag?: string;
+  /** OneDrive driveItem id. Optional: snapshots written before this field
+   *  existed do not carry it (handled by the one-time full rebuild). */
+  id?: string;
 }
 
 export const COMMAND_CALLBACK_ONEDRIVE = "astral-trek-onedrive";
