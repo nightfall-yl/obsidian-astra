@@ -873,18 +873,16 @@ export const assignOperationToFileInplaceV3Inner = (
       keptFolder.add(getParentFolder(r.key));
       return r;
     }
-    // No-baseline creation conflicts (both sides exist, prevSync has no
-    // record — e.g. auto-created daily journal files racing across two
-    // devices): a brand-new EMPTY local file must not silently overwrite
-    // a non-empty remote copy just because its mtime is newer, no matter
-    // which conflict resolution is chosen. Symmetrically, an empty remote
-    // file should not shadow a non-empty local one; in encrypted mode the
-    // remote plaintext size is unknowable, so that check is limited to
-    // plaintext syncs. Bidirectional with conflict resolution only.
+    // One-sided empty file protection (both sides exist): an EMPTY local
+    // file must not silently overwrite a non-empty remote copy just because
+    // its mtime is newer — regardless of prevSync baseline — and vice versa.
+    // This catches both brand-new creation conflicts AND local "delete then
+    // recreate" patterns (e.g. daily note plugins) that happen to have a
+    // stale prevSync record. In encrypted mode the remote plaintext size is
+    // unknowable, so that check is limited to plaintext syncs.
     if (
       !isPushOnlyMode &&
       !isPullOnlyMode &&
-      r.prevSync === undefined &&
       r.sizeLocal !== undefined &&
       r.sizeRemote !== undefined &&
       sizeLocalComp !== undefined &&

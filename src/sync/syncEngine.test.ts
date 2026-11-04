@@ -322,6 +322,124 @@ describe("assignOperationToFileInplaceV3Inner — conflict resolution", () => {
     );
     expect(r.decision).toBe("uploadLocalToRemote");
   });
+
+  // With prevSync baseline: the original bug path — daily-note plugins do
+  // "delete then recreate" locally, leaving a stale prevSync record, and
+  // the freshly created empty file has a newer mtime. It must NOT cover
+  // a non-empty remote copy.
+  it("never clobbers a non-empty remote file with a local \"delete then recreate\" empty file (prevSync exists)", () => {
+    const r = assignOperationToFileInplaceV3Inner(
+      mkState({
+        key: "note.md",
+        existLocal: true,
+        existRemote: true,
+        mtimeLocal: 2000,
+        mtimeRemote: 1500,
+        sizeLocal: 0,
+        sizeRemote: 50,
+        prevSync: mkPrevSync("note.md", 500, 42),
+      }),
+      kept()
+    );
+    expect(r.decision).toBe("downloadRemoteToLocal");
+  });
+
+  it("never clobbers a non-empty local file with a remote \"delete then recreate\" empty file (prevSync exists)", () => {
+    const r = assignOperationToFileInplaceV3Inner(
+      mkState({
+        key: "note.md",
+        existLocal: true,
+        existRemote: true,
+        mtimeLocal: 1500,
+        mtimeRemote: 2000,
+        sizeLocal: 50,
+        sizeRemote: 0,
+        prevSync: mkPrevSync("note.md", 500, 42),
+      }),
+      kept()
+    );
+    expect(r.decision).toBe("uploadLocalToRemote");
+  });
+
+  it("empty-file protection works regardless of conflictAction (no disabled mode in our project)", () => {
+    // upstream added conflictAction !== "disabled" but our project only has
+    // keep_newer | keep_larger — no disabled option. The blanket protection
+    // covers both conflict strategies equally.
+    const rKeepNewer = assignOperationToFileInplaceV3Inner(
+      mkState({
+        key: "note.md",
+        existLocal: true,
+        existRemote: true,
+        mtimeLocal: 2000,
+        mtimeRemote: 1000,
+        sizeLocal: 0,
+        sizeRemote: 50,
+      }),
+      kept()
+    );
+    const rKeepLarger = assignOperationToFileInplaceV3Inner(
+      mkState({
+        key: "note.md",
+        existLocal: true,
+        existRemote: true,
+        mtimeLocal: 2000,
+        mtimeRemote: 1000,
+        sizeLocal: 0,
+        sizeRemote: 50,
+      }),
+      kept(),
+      "",
+      "bidirectional",
+      "keep_larger"
+    );
+    expect(rKeepNewer.decision).toBe("downloadRemoteToLocal");
+    expect(rKeepLarger.decision).toBe("downloadRemoteToLocal");
+  });
+
+  it("encrypted mode: local empty file with prevSync still protects (when both sizes are available)", () => {
+    // The protection block requires r.sizeRemote !== undefined, so in real
+    // encrypted-mode scenarios (where remote plaintext size is unknown,
+    // sizeRemote=undefined) the block can't enter. But when both plaintext
+    // sizes happen to be known, the local-empty check is safe because
+    // password !== "" makes it short-circuit — it always pulls remote,
+    // assuming remote might be non-empty.
+    const r = assignOperationToFileInplaceV3Inner(
+      mkState({
+        key: "note.md",
+        existLocal: true,
+        existRemote: true,
+        mtimeLocal: 2000,
+        mtimeRemote: 1500,
+        sizeLocal: 0,
+        sizeRemote: 50,
+        sizeLocalEnc: 16,
+        sizeRemoteEnc: 32,
+        prevSync: mkPrevSync("note.md", 500, 42),
+      }),
+      kept(),
+      "p@s5w0rd"
+    );
+    expect(r.decision).toBe("downloadRemoteToLocal");
+  });
+
+  it("prevSync.size===0 baseline also protects (blanket rule, not wasNonEmpty)", () => {
+    // Edge case: file was once synced as empty, then remote got content,
+    // local recreates empty. Blanket rule still protects remote content.
+    const r = assignOperationToFileInplaceV3Inner(
+      mkState({
+        key: "note.md",
+        existLocal: true,
+        existRemote: true,
+        mtimeLocal: 2000,
+        mtimeRemote: 1500,
+        sizeLocal: 0,
+        sizeRemote: 50,
+        prevSync: mkPrevSync("note.md", 500, 0),
+      }),
+      kept()
+    );
+    expect(r.decision).toBe("downloadRemoteToLocal");
+  });
 });
 
 describe("getSyncPlanV3 — integration", () => {

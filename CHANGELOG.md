@@ -19,6 +19,7 @@
 - **快照键与远端状态不同步**：远端删除成功后立即移除对应快照键，不再等下一轮 delta（远端文件已被别处删除时，`deleteJson` 的 404 视为删除达成，清快照键与清删除/改名历史照常执行）；全量枚举改为从空快照重建，不再以旧快照为基底
 - **远端快照未记录 `driveItem.id`**：delta 删除项缺少 `name` / `parentReference` 时整条被跳过，快照残留幽灵键；快照现持久化 `driveItem.id`，删除优先按 id 反查（一次构建 id→键索引）摘除，id 缺失或不匹配才回退路径/文件名，同一文件的明文键与密文键一并移除。旧快照（条目缺 `id`）在下一次同步时清空并全量枚举重建一次，`deltaLink` 保留，重建后条目都带 id，条件不再成立，不退化每轮全量
 - **非 2xx 且响应体无 Graph 错误字段被当成成功**：`oneDriveApiRequest` 只在响应体含 `error` 字段时抛错，其余非 2xx 一律返回 `{}`；元数据 404 会使 `downloadUrl` 取值为空、随后抛出不带状态码的错误并计入熔断，delta 分页则被当成零条目、把快照整体清空。现补 `status >= 400` 兜底，非 2xx 一律抛带状态码的错误，空响应体用状态文本填充
+- **双向同步空文件覆盖非空文件**：每日笔记等插件在本地「先删后建」重建空文件时，空文件因 mtime 最新会走 mtime 比较路径覆盖远端非空副本；原空文件保护只覆盖 prevSync 不存在的无基线场景。现升级为 blanket rule——只要一边空一边非空就选非空侧，无论 prevSync 是否存在
 
 ### 性能
 - **远端快照迁出 data.json**：`settings.sync.onedriveConfig.remoteSnapshot`（约 1,600+ 路径的 OneDrive delta 续传快照）搬到 IndexedDB `astra-sync-db` 的独立 object store `remoteSnapshot`（keyPath=`key`，库版本 1→2）。首次启动自动写 IDB、删内存字段、一次 saveSettings 落盘；幂等标记 `remoteSnapshotMigrated`。IDB 读失败时一律降级为空快照，同步走全量枚举不抛异常。`deltaLink`（小字符串）仍留 settings
