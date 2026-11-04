@@ -489,7 +489,7 @@ export const DEFAULT_SETTINGS: AstraSettings = {
 /* ======================= 数据版本与迁移（清退机制） ======================= */
 
 /** 当前数据版本：随一次性迁移递增；防御性 normalization 不占版本号。 */
-export const CURRENT_DATA_VERSION = 2;
+export const CURRENT_DATA_VERSION = 3;
 
 /**
  * 清退线：低于该版本号的持久化数据放弃迁移、直接回默认值。
@@ -526,6 +526,42 @@ function migrateQuickCaptureLegacy(saved: Record<string, unknown>): void {
   }
 }
 
+/** v2 → v3：清理多轮功能裁剪后残留的废弃字段（均已从 settings 接口移除，
+ *  仅作为孤儿键静默存在于 data.json）。 */
+function migratePruneDeadFields(saved: Record<string, unknown>): void {
+  const settings = saved.settings as Record<string, unknown> | undefined;
+  if (!settings) return;
+
+  // settings 级别（旧「固定 todo 文件」「快捷插件入口」「flomo 调试快照」
+  //  以及整一块「机会看板」功能，均已被后续设计替换/移除）
+  const deadKeys = [
+    "todoFilePath",
+    "quickPluginIds",
+    "quickPluginsInitialized",
+    "flomoDebug",
+    "boardTitle",
+    "opportunityFile",
+    "currentOppView",
+    "boardStages"
+  ];
+  for (const k of deadKeys) delete settings[k];
+
+  // settings.search 级别（搜索设置裁剪后遗留）
+  const search = settings.search as Record<string, unknown> | undefined;
+  if (search) {
+    delete search.ribbonIcon;
+    delete search.showCreateButton;
+  }
+
+  // settings.sync 级别（同步功能裁剪后遗留）
+  const sync = settings.sync as Record<string, unknown> | undefined;
+  if (sync) {
+    delete sync.syncOnRemoteChangesAfterMilliseconds;
+    delete sync.enableStatusBarInfo;
+    delete sync.encryptionEnabled;
+  }
+}
+
 export const DATA_MIGRATIONS: DataMigration[] = [
   {
     to: 2,
@@ -533,6 +569,12 @@ export const DATA_MIGRATIONS: DataMigration[] = [
     description:
       "quickCapture 旧字段（storagePath/namingPattern/templateFile）迁移为 filePath",
     run: migrateQuickCaptureLegacy
+  },
+  {
+    to: 3,
+    introducedIn: "26.3.0",
+    description: "清理多轮功能裁剪后残留的废弃字段",
+    run: migratePruneDeadFields
   }
 ];
 

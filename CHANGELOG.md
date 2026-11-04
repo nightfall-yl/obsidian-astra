@@ -6,6 +6,13 @@
 
 ## [26.3.5] - 2026-11-04
 
+### 调整
+- **data.json 废弃字段清理（v2 → v3 一次性迁移）**：清除多轮功能裁剪后残留的 12 个孤儿键
+  - 旧「固定 todo 文件」`todoFilePath`、旧「快捷插件入口」`quickPluginIds`/`quickPluginsInitialized`、一次性调试快照 `flomoDebug`
+  - 已整块移除的「机会看板」`boardTitle`/`opportunityFile`/`currentOppView`/`boardStages`
+  - 已裁剪的搜索设置 `settings.search.ribbonIcon`/`showCreateButton`、同步设置 `settings.sync.syncOnRemoteChangesAfterMilliseconds`/`enableStatusBarInfo`/`encryptionEnabled`
+  - 迁移幂等，首次加载即执行；无需迁移的新安装不受影响
+
 ### 修复
 - **OneDrive vault 根目录识别误判**：vault 根目录检测用 `includes("/VaultName")` 子串匹配，当 OneDrive 应用文件夹名恰好以 vault 名开头（如应用文件夹叫 `Obsidian Vault Sync`、vault 名叫 `Obsidian Vault`）时会误判，导致每次同步枚举远端时控制台刷 `skip unrecognized onedrive item` 警告；改为路径段精确匹配（`endsWith` / `includes` 前后均要求 `/` 边界）
 - **删除文件后同步中止（远端快照幽灵条目）**：删除笔记后远端快照未移除对应键，下一轮被判为"远端新增"并下载，遇 HTTP 404 累计 3 条错误后整轮中止，且每轮重复；下载遇 404 现按"远端已不存在"处理，摘除快照键、跳过该条目、不计入错误累计（401/403/429/5xx 与网络错误仍正常报错）
