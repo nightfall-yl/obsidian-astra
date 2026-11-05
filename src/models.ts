@@ -198,6 +198,8 @@ export interface OneDriveSyncSettings {
   syncOnSaveEnabled: boolean;
   /** 上次成功同步时间戳（-1 = 尚未同步过） */
   lastSynced: number;
+  /** 是否在状态栏显示同步状态 */
+  showStatusBar: boolean;
   /** 输出同步引擎调试日志 */
   debug: boolean;
 }
@@ -219,6 +221,7 @@ export const DEFAULT_SYNC_SETTINGS: OneDriveSyncSettings = {
   autoRunEveryMilliseconds: -1,
   syncOnSaveEnabled: false,
   lastSynced: -1,
+  showStatusBar: true,
   debug: false,
 };
 
@@ -682,6 +685,8 @@ export function normalizeSyncSettings(
   }
   delete legacy.syncOnSaveAfterMilliseconds;
   delete legacy.initRunAfterMilliseconds;
+  // 旧配置没有该字段 → 补默认开启（显式关闭才为 false）
+  merged.showStatusBar = saved?.showStatusBar !== false;
   return merged;
 }
 

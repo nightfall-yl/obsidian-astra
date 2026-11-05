@@ -13,6 +13,8 @@ import type {
 import {
   Modal,
   Notice,
+  Platform,
+  Setting,
   TFile,
   normalizePath,
   setIcon,
@@ -33,6 +35,7 @@ import {
 } from "./remoteForOnedrive";
 import { RemoteClient } from "./remote";
 import {
+  remoteSnapshotClear,
   remoteSnapshotSaveAll
 } from "./idb";
 import type { InternalDBs } from "./localdb";
@@ -52,6 +55,7 @@ import {
   type SyncStatusType,
 } from "./syncEngine";
 import { SyncAutoScheduler, type AutoSyncSource } from "./syncScheduler";
+import { composeStatusBarProgress, parseProgressMessage } from "./statusBarText";
 import { setSyncDebugEnabled, syncLog } from "./log";
 
 /** 同步运行中需要实时显示到状态栏的步骤（→ i18n 键） */
@@ -119,15 +123,37 @@ interface OAuth2Info {
 class OneDriveAuthHelperModal extends Modal {
   constructor(
     app: App,
+    private readonly authUrl: string,
     private readonly onFinished: () => void
   ) {
     super(app);
   }
 
   onOpen(): void {
-    this.contentEl.createEl("p", {
-      text: $t("sync.auth.waitingHint"),
+    const { contentEl } = this;
+    contentEl.createEl("p", { text: $t("sync.auth.waitingHint") });
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: $t("sync.auth.openManualHint"),
     });
+    contentEl.createEl("p").createEl("a", {
+      href: this.authUrl,
+      text: this.authUrl,
+    });
+    new Setting(contentEl).addButton((btn) =>
+      btn
+        .setButtonText($t("sync.auth.copyLink"))
+        .onClick(() => {
+          void (async () => {
+            try {
+              await navigator.clipboard.writeText(this.authUrl);
+              new Notice($t("sync.auth.copyLinkNotice"));
+            } catch {
+              // 剪贴板不可用时保持链接可手动长按复制，不抛错
+            }
+          })();
+        })
+    );
   }
 
   onClose(): void {
@@ -208,8 +234,7 @@ export class SyncManager {
     this.unregisterVaultEvents();
     this.oauth2Info?.helperModal?.close();
     this.oauth2Info = null;
-    this.statusBarItemEl?.remove();
-    this.statusBarItemEl = null;
+    this.removeStatusBarItem();
   }
 
   get isReady(): boolean {
@@ -281,23 +306,43 @@ export class SyncManager {
   private updateStatusBarProgress(): void {
     const stepKey = SYNC_STATUS_STEP_KEYS[this.currentStatus.status];
     if (!this.syncing || stepKey === undefined) return;
+    const el = this.ensureStatusBarItem();
+    if (el === null) return;
+    let step = $t(stepKey);
+    if (this.currentStatus.status === "syncing" && this.currentStatus.message) {
+      const parsed = parseProgressMessage(this.currentStatus.message);
+      const suffix =
+        parsed === undefined
+          ? ""
+          : $t("sync.statusbar.progress", { pct: parsed.pct });
+      step = composeStatusBarProgress(
+        step,
+        this.currentStatus.message,
+        suffix
+      );
+    }
+    const text = $t("sync.status.statusBarProgress", { step });
+    el.setText(text);
+    // 无障碍标签与可见文案保持一致（步骤名 + 进度）
+    el.setAttribute("aria-label", text);
+  }
+
+  /** 状态栏元素：仅在同步启用且开启「状态栏显示」时存在 */
+  private ensureStatusBarItem(): HTMLElement | null {
+    const s = this.plugin.data.settings.sync;
+    if (!s.enabled || !s.showStatusBar) {
+      this.removeStatusBarItem();
+      return null;
+    }
     if (this.statusBarItemEl === null) {
       this.statusBarItemEl = this.plugin.addStatusBarItem();
     }
-    let step = $t(stepKey);
-    if (this.currentStatus.status === "syncing" && this.currentStatus.message) {
-      const parts = this.currentStatus.message.split("/").map(Number);
-      if (parts.length === 2 && parts.every(Number.isFinite) && parts[1]! > 0) {
-        const [idx, total] = parts;
-        const pct = Math.min(100, Math.round((idx! / total!) * 100));
-        step += ` ${this.currentStatus.message}（${pct}%）`;
-      } else {
-        step += ` ${this.currentStatus.message}`;
-      }
-    }
-    this.statusBarItemEl.setText(
-      $t("sync.status.statusBarProgress", { step })
-    );
+    return this.statusBarItemEl;
+  }
+
+  private removeStatusBarItem(): void {
+    this.statusBarItemEl?.remove();
+    this.statusBarItemEl = null;
   }
 
   /** 应用 enabled 开关：注册/注销 vault 事件与定时器 */
@@ -307,6 +352,7 @@ export class SyncManager {
     this.unregisterVaultEvents();
 
     if (!s.enabled) {
+      this.removeStatusBarItem();
       return;
     }
 
@@ -333,22 +379,16 @@ export class SyncManager {
   /** 状态栏：空闲时显示上次成功同步的相对时间（对齐上游） */
   private updateStatusBar(): void {
     const s = this.plugin.data.settings.sync;
-    if (!s.enabled) {
-      this.statusBarItemEl?.remove();
-      this.statusBarItemEl = null;
-      return;
-    }
-    if (this.statusBarItemEl === null) {
-      this.statusBarItemEl = this.plugin.addStatusBarItem();
-    }
+    const el = this.ensureStatusBarItem();
+    if (el === null) return;
     if (s.lastSynced === -1) {
-      this.statusBarItemEl.setText($t("sync.statusbar.never"));
-      this.statusBarItemEl.setAttribute("aria-label", $t("sync.statusbar.neverLabel"));
+      el.setText($t("sync.statusbar.never"));
+      el.setAttribute("aria-label", $t("sync.statusbar.neverLabel"));
       return;
     }
     const { msg, label } = formatLastSyncedRelative(s.lastSynced);
-    this.statusBarItemEl.setText(msg);
-    this.statusBarItemEl.setAttribute("aria-label", label);
+    el.setText(msg);
+    el.setAttribute("aria-label", label);
   }
 
   private clearTimers(): void {
@@ -433,12 +473,21 @@ export class SyncManager {
       clientID,
       s.onedriveConfig.authority
     );
-    const helperModal = new OneDriveAuthHelperModal(this.plugin.app, () => {
-      this.oauth2Info = null;
-    });
+    const helperModal = new OneDriveAuthHelperModal(
+      this.plugin.app,
+      authUrl,
+      () => {
+        this.oauth2Info = null;
+      }
+    );
+    // 必须先渲染 Modal：移动端没有自动跳转，链接与复制按钮是唯一入口
     helperModal.open();
     this.oauth2Info = { verifier, helperModal };
-    window.open(authUrl);
+    // 桌面端（Electron）才尝试自动打开系统浏览器；iOS WKWebView 下 window.open
+    // 通常返回 null 且无可见行为，因此移动端直接跳过，由 Modal 内链接手动打开
+    if (!Platform.isMobileApp) {
+      window.open(authUrl);
+    }
   }
 
   private async handleOAuthCallback(
@@ -494,9 +543,20 @@ export class SyncManager {
     s.onedriveConfig.accessTokenExpiresAtTime = 0;
     s.onedriveConfig.accessTokenExpiresInSeconds = 0;
     s.onedriveConfig.username = "";
+    // 同时清空 delta 续传状态与远端快照，避免换账号/重新授权后沿用旧游标
+    s.onedriveConfig.deltaLink = "";
+    s.onedriveConfig.remoteSnapshotMigrated = true;
+    s.lastSynced = -1;
     await this.plugin.saveSettings();
+    try {
+      await remoteSnapshotClear();
+    } catch (err) {
+      // 快照清理失败不阻断 token 清理，仅记录日志
+      syncLog.error("revokeAuth: failed to clear remote snapshot", err);
+    }
     this.client = null;
     new Notice($t("sync.auth.revoked"));
+    this.updateStatusBar();
     this.notifySettingsRefresh();
   }
 

@@ -92,6 +92,14 @@ describe("normalizeSyncSettings", () => {
     expect(normalized.skipSizeLargerThan).toBe(-1);
     expect(normalized.deleteToWhere).toBe("system_trash");
   });
+
+  it("旧配置缺 showStatusBar 时补默认开启，显式关闭保留", () => {
+    expect(normalizeSyncSettings({}).showStatusBar).toBe(true);
+    expect(normalizeSyncSettings(undefined).showStatusBar).toBe(true);
+    expect(normalizeSyncSettings({ showStatusBar: false }).showStatusBar).toBe(
+      false
+    );
+  });
 });
 
 describe("DATA_MIGRATIONS", () => {

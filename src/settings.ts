@@ -1,5 +1,6 @@
 import { t as $t } from "./i18n";
 import { unixTimeToStr } from "./sync/misc";
+import { getRevokeAddr } from "./sync/remoteForOnedrive";
 import {
   AbstractInputSuggest,
   Modal,
@@ -1064,6 +1065,46 @@ class SyncConfigDirConfirmModal extends Modal {
   }
 }
 
+/** 撤回鉴权：两步 Modal（先引导去 Microsoft 账户侧移除授权，再清理本地登录信息） */
+class OnedriveRevokeAuthModal extends Modal {
+  constructor(
+    app: App,
+    private readonly plugin: AstraDashboardPlugin
+  ) {
+    super(app);
+  }
+
+  async onOpen(): Promise<void> {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: $t("sync.auth.revokeTitle") });
+    contentEl.createEl("p", { text: $t("sync.auth.revokeStep1") });
+
+    const url = await getRevokeAddr();
+    // 普通链接渲染，由 Obsidian 宿主接管外链跳转（移动端同样可用）
+    contentEl.createEl("p").createEl("a", { href: url, text: url });
+
+    contentEl.createEl("p", { text: $t("sync.auth.revokeStep2") });
+    new Setting(contentEl)
+      .setName($t("sync.auth.revokeCleanName"))
+      .setDesc($t("sync.auth.revokeCleanDesc"))
+      .addButton((btn) =>
+        btn
+          .setButtonText($t("sync.auth.revokeCleanButton"))
+          .setWarning()
+          .onClick(() => {
+            void (async () => {
+              await this.plugin.syncManager.revokeAuth();
+              this.close();
+            })();
+          })
+      );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
 function renderSyncSettings(
   syncEl: HTMLElement,
   plugin: AstraDashboardPlugin,
@@ -1096,10 +1137,7 @@ function renderSyncSettings(
           .setButtonText($t("settings_onedrive_revoke_button"))
           .setWarning()
           .onClick(() => {
-            void (async () => {
-              await syncManager.revokeAuth();
-              rerender();
-            })();
+            new OnedriveRevokeAuthModal(plugin.app, plugin).open();
           })
       );
     });
@@ -1242,6 +1280,22 @@ function renderSyncSettings(
         toggle.setValue(s.syncOnSaveEnabled).onChange((value) => {
           void (async () => {
             s.syncOnSaveEnabled = value;
+            await plugin.saveSettings();
+            syncManager.applyEnabled();
+          })();
+        })
+      );
+  });
+
+  // 状态栏显示开关（关闭后立即移除条目，开启后立即重建并刷新文案）
+  basicGroup.addSetting((setting) => {
+    setting
+      .setName($t("settings_showstatusbar"))
+      .setDesc($t("settings_showstatusbar_desc"))
+      .addToggle((toggle) =>
+        toggle.setValue(s.showStatusBar).onChange((value) => {
+          void (async () => {
+            s.showStatusBar = value;
             await plugin.saveSettings();
             syncManager.applyEnabled();
           })();

@@ -1,6 +1,6 @@
 {
   "name": "astral-trek",
-  "version": "26.3.5",
+  "version": "26.3.6",
   "description": "All-in-one workspace: dashboard, vault search, OneDrive sync and markdown enhancements.",
   "main": "main.js",
   "type": "module",
