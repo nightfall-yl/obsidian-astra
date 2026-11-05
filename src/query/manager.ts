@@ -21,7 +21,17 @@ import {
 } from "./parser";
 import { parseFrontmatter } from "../data/taskParser";
 import { t as $t } from "../i18n";
+import {
+  compareValues,
+  evaluateExpression,
+  evaluateWhere,
+  formatCellValue,
+  isEmptyValue,
+  resolveFieldValue,
+  type FieldContext
+} from "./evaluate";
 import { toggleTaskInLines, type WritebackResult } from "./taskWriteback";
+import { buildOutlinks } from "./outlinks";
 
 /** frontmatter 行：TABLE / LIST 的数据源。 */
 interface Row {
@@ -46,64 +56,43 @@ interface TaskRow {
 
 type QueryRow = Row | TaskRow;
 
-/** 字段值 → 字符串（对象转 JSON，避免显示 [object Object]；null/undefined 转空串）。 */
-function stringifyValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  // bigint / symbol / function：frontmatter 与任务文本中不出现，不显示
-  return "";
-}
-
-/** 从某行拿到指定字段的原始值（内置字段 + frontmatter / 任务字段）。 */
-function resolveField(row: QueryRow, field: string): unknown {
+/** 行 → 可求值上下文（TASK 行附带任务字段，frontmatter 行附带 frontmatter）。 */
+function rowContext(row: QueryRow, app: App): FieldContext {
+  // 与 Dataview 对齐：路径比较统一在「已解析路径」层面
+  const resolveLink = (target: string): string | null => {
+    if (target === "" || target === row.file.path) return row.file.path;
+    return (
+      app.metadataCache.getFirstLinkpathDest(target, row.file.path)?.path ?? null
+    );
+  };
+  const cache = app.metadataCache.getFileCache(row.file);
+  const file = {
+    basename: row.file.basename,
+    path: row.file.path,
+    folder: row.file.parent?.path ?? "",
+    mtime: row.file.stat.mtime,
+    ctime: row.file.stat.ctime,
+    size: row.file.stat.size,
+    outlinks: buildOutlinks(
+      cache?.links,
+      cache?.embeds,
+      row.file.path,
+      resolveLink
+    )
+  };
   if (row.kind === "task") {
-    switch (field) {
-      case "text":
-        return row.text;
-      case "completed":
-        return row.status === "x";
-      case "status":
-        return row.status;
-      case "line":
-        return row.line;
-      case "section":
-        return row.section;
-      case "path":
-      case "file.path":
-        return row.file.path;
-      case "file.name":
-        return row.file.basename;
-      case "file.folder":
-        return row.file.parent?.path ?? "";
-      case "file.link":
-        return row.file.basename; // 渲染阶段转为内部链接
-      default:
-        return null;
-    }
+    return {
+      file,
+      resolveLink,
+      task: {
+        status: row.status,
+        text: row.text,
+        line: row.line,
+        section: row.section
+      }
+    };
   }
-  const { file, frontmatter } = row;
-  switch (field) {
-    case "file.name":
-      return file.basename;
-    case "file.path":
-      return file.path;
-    case "file.folder":
-      return file.parent?.path ?? "";
-    case "file.link":
-      return file.basename; // 渲染阶段转为内部链接
-    default:
-      return field in frontmatter ? frontmatter[field] : null;
-  }
+  return { file, resolveLink, frontmatter: row.frontmatter };
 }
 
 /** 找到 line 之前最近的一个标题作为章节名。 */
@@ -180,24 +169,22 @@ export class QueryManager {
   private applyClauses<T extends QueryRow>(rows: T[], query: CommonClauses): T[] {
     let result = rows;
     if (query.where) {
-      const { field, op, value } = query.where;
-      result = result.filter((row) => {
-        if (op === "truthy") return !!resolveField(row, field);
-        if (op === "falsy") return !resolveField(row, field);
-        const current = stringifyValue(resolveField(row, field));
-        return op === "=" ? current === value : current !== value;
-      });
+      result = result.filter((row) =>
+        evaluateWhere(rowContext(row, this.app), query.where!)
+      );
     }
 
     if (query.sort) {
       const { field, desc } = query.sort;
       result = [...result].sort((a, b) => {
-        const va = stringifyValue(resolveField(a, field));
-        const vb = stringifyValue(resolveField(b, field));
+        const va = resolveFieldValue(rowContext(a, this.app), field);
+        const vb = resolveFieldValue(rowContext(b, this.app), field);
         // 空值排最后
-        if (va === "" && vb !== "") return 1;
-        if (vb === "" && va !== "") return -1;
-        const cmp = va.localeCompare(vb);
+        const ea = isEmptyValue(va);
+        const eb = isEmptyValue(vb);
+        if (ea && !eb) return 1;
+        if (eb && !ea) return -1;
+        const cmp = compareValues(va, vb);
         return desc ? -cmp : cmp;
       });
     }
@@ -305,7 +292,11 @@ export class QueryManager {
     }
     for (const col of query.columns) {
       let text = col.alias ?? col.field;
-      if (!fileCountShown && col.field === "file.link") {
+      if (
+        !fileCountShown &&
+        col.expr.kind === "field" &&
+        col.expr.field === "file.link"
+      ) {
         text = `${text} (${count})`;
         fileCountShown = true;
       }
@@ -321,13 +312,14 @@ export class QueryManager {
           row.file
         );
       }
+      const ctx = rowContext(row, this.app);
       for (const col of query.columns) {
         const td = tr.createEl("td");
-        if (col.field === "file.link") {
+        if (col.expr.kind === "field" && col.expr.field === "file.link") {
           td.addClass("astra-query-file-cell");
           this.renderLink(td, row.file);
         } else {
-          this.renderValue(td, resolveField(row, col.field));
+          this.renderValue(td, evaluateExpression(ctx, col.expr), col.field);
         }
       }
     }
@@ -343,11 +335,19 @@ export class QueryManager {
       if (query.format === null) {
         this.renderLink(li, row.file);
       } else if (query.withoutId) {
-        this.renderValue(li, resolveField(row, query.format));
+        this.renderValue(
+          li,
+          resolveFieldValue(rowContext(row, this.app), query.format),
+          query.format
+        );
       } else {
         this.renderLink(li, row.file);
         li.appendText(": ");
-        this.renderValue(li, resolveField(row, query.format));
+        this.renderValue(
+          li,
+          resolveFieldValue(rowContext(row, this.app), query.format),
+          query.format
+        );
       }
     }
   }
@@ -445,15 +445,11 @@ export class QueryManager {
     });
   }
 
-  private renderValue(el: HTMLElement, value: unknown): void {
+  private renderValue(el: HTMLElement, value: unknown, field: string): void {
     if (value === null || value === undefined) {
       return;
     }
-    if (Array.isArray(value)) {
-      el.setText(value.map((v) => this.normalize(stringifyValue(v))).join(", "));
-      return;
-    }
-    el.setText(this.normalize(stringifyValue(value)));
+    el.setText(this.normalize(formatCellValue(field, value)));
   }
 
   /** 折叠所有连续空白（含换行）为单个空格，并去除首尾空白。 */

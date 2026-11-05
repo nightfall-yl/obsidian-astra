@@ -4,17 +4,24 @@
 
 > 说明：本更新日志自 `26.1.1` 起维护。
 
+
 ## [26.3.6] - 2026-11-05
+
+### 新增
+- **函数调用与函数注册表**：`parseExpression` 支持函数调用，内置函数改为注册表分发，未知函数抛 `不支持的函数：X`；新增 `dateformat`、`contains`、`startswith`、`endswith`
+- **内置数值字段 `file.mtime` / `file.ctime` / `file.size`**：取 `TFile.stat` 的毫秒时间与字节数；`file.mtime` / `file.ctime` 单元格默认渲染为 `yyyy-MM-dd HH:mm`
+- **`[[wikilink]]` 字面量**：支持 `[[path]]`、`[[path#heading]]`、`[[path|alias]]` 三种写法（`|alias` 忽略、`#heading` 不参与路径比较），可用于函数实参与比较右值
+- **`file.outlinks` 字段**：合并 `metadataCache` 的 `links` 与 `embeds`（embed 计入，对齐 Dataview），按解析后库内路径去重，解析不到的链接直接丢弃，纯 `#heading` 自引用归一为源文件路径
+- **`contains` / `startswith` / `endswith` 语义**：`contains` 左侧须为数组，逐项按解析后路径严格全等；`startswith` / `endswith` 区分大小写，左侧为 `null`、`undefined` 或数组时返回 `false`；`!函数(...)` 复用既有 `!` 分支取反，`!` 语义不变
 
 ### 调整
 - **OneDrive 鉴权入口改造（授权等待窗口与撤回鉴权）**：两处交互集中在同步设置页——授权等待窗口补齐手动打开入口，撤回鉴权改为两步确认，避免移动端无法跳转浏览器时流程卡死
   - **授权等待窗口**：窗口内始终渲染可点击授权链接与「复制链接」按钮，桌面端保留自动跳转、移动端跳过自动跳转；此前只显示等待提示，iOS 上点了没反应
   - **撤回鉴权**：改为两步 Modal（先引导去 Microsoft 账号侧移除授权，再点「清理」），清理范围补齐 `deltaLink`、IndexedDB 远端快照、`lastSynced` 复位；`account.live.com` 链接改普通链接渲染；不删除本地笔记、远端文件与 `prevSync` 基线
-
-### 修复
+- **主设置页新增状态栏开关**：状态栏此前只能跟随同步总开关存在；现在新增设置项「在状态栏显示同步状态」（`settings.sync.showStatusBar`，默认开启，旧配置缺字段按开启补齐），关闭立即移除状态栏条目、开启立即重建并刷新文案，无需重启，也不会残留或重复注册
 - **状态栏进度文案改为中点分隔**：进度百分比后缀统一为 ` · {pct}%`（例如 `OneDrive Syncing 12/300 · 4%`），文案走 i18n 键 `sync.statusbar.progress`，中英文的空格与分隔符均由模板和拼接函数保证，不再有硬编码标点
 - **进度态的无障碍标签未跟随可见文案**：同步进行中 `aria-label` 仍停留在空闲态的上次同步日期，读屏内容与状态栏实际显示不一致；现在进度刷新时同步更新 `aria-label`（步骤名 + 进度），空闲态的日期提示逻辑不变
-- **状态栏无法单独关闭**：状态栏此前只能跟随同步总开关存在；现在新增设置项「在状态栏显示同步状态」（`settings.sync.showStatusBar`，默认开启，旧配置缺字段按开启补齐），关闭立即移除状态栏条目、开启立即重建并刷新文案，无需重启，也不会残留或重复注册
+
 
 ## [26.3.5] - 2026-11-04
 
@@ -39,10 +46,10 @@
 - **热力图复用 scan 归组结果**：热力图改为直接读 stats.scan() 已经完成的全库按 mtime 归组结果 `dailyNoteCounts`，消除每次刷新时的第二次全库遍历；约 5000 文件量级可省 ~11ms/次刷新（估算值）。仅 FILE_MTIME 模式走新路径，FILE_CTIME / FILE_NAME / PAGE_PROPERTY 三种模式保持原遍历逻辑
 - **删除停用的指标卡片 UI 代码**：此前用 `void this.renderMetrics` 禁用的 4 个统计大卡片（`renderMetrics` / `createMetricCard` / `noteDetail`）及其全套 CSS（`.astra-metrics` ~45 行）、i18n key（`dv.stats.*` × 6）一次性清除；数据层暂保留
 
+
 ## [26.3.4] - 2026-11-03
 
 ### 调整
-- **同步状态栏：显示百分比**：同步进行中从 `5/156` 改为 `5/156（3%）`，中文/英文同步更新
 - **自动同步触发时机收敛**：设置页 Vault Sync 保留两项，统一调度器 `SyncAutoScheduler`（含可测试纯函数 `computeScheduledRunTime`）承接原先三个定时器的职责；任意两次自动同步之间强制最小间隔 30s（手动同步不受此限制）
   - 「自动同步」(`autoRunEveryMilliseconds`，单下拉四档：不设置 / 每 5 分钟 / 每 10 分钟 / 每 30 分钟；非「不设置」时启动后 5 秒先跑一次)
   - 「保存后同步延迟」(`syncOnSaveEnabled`，布尔开关，文件保存后固定 5 秒触发)；同时删除「启动后自动运行一次」(`initRunAfterMilliseconds`)
@@ -55,14 +62,13 @@
 ### 性能
 - **Dashboard 刷新事件合并**：vault modify/create/delete/rename 统一 100ms trailing debounce、metadataCache resolved 300ms debounce，500ms maxWait 持续事件流强制刷新兜底；saveSettings / saveDashboardPreferences 等即时反馈路径保留同步刷新不受影响；onunload 清理定时器并兜底执行待刷新
 
+
 ## [26.3.3] - 2026-11-02
 
 ### 调整
 - **设置页分组渲染加异常隔离**：四个 tab（Astra / Markdown+ / Vault Search / Vault Sync）各自 try/catch，单个分组渲染失败不再牵连后续分组，容器内显示简短错误提示（"该设置分组加载失败，请尝试重启插件"），控制台打印分组名与异常
 - **IndexedDB 库名 `astral-trek-sync-db` → `astra-sync-db`**：首次启动检测旧库存在时，读全量 kv store，写入新库后删除旧库；迁移幂等、失败静默，降级为空新库。已授权用户的 OneDrive 同步状态、删除历史、mapping 全部保留
 -  **「检测远端变更后同步延迟」功能整体删除**
-
-### 文档
 - **manifest / package description 更新**：反映当前实际功能（聚合工作台、全文搜索、OneDrive 同步、Markdown+、astra 查询块），移除已不再是核心卖点的知识图谱、插件管理、库健康等过时描述
 - **CODE_WIKI 仓库地址修正**：`obsidian-astral-trek` → `obsidian-astra`
 
@@ -85,12 +91,14 @@
   - **删除语义补全**：原代码直接跳过 delta 返回的 `deleted` 标记条目，导致续传时远端删除会被吞掉；现在删除条目正常解析 key 后从快照移除（元数据异常时按路径后缀反查兜底）
   - **失败回退**：deltaLink 过期（410 Gone）或网络异常时自动清空 deltaLink + 快照，回退全量枚举，下次同步自动恢复
 
+
 ## [26.3.1] - 2026-10-31
 
 ### 修复
 - **OneDrive 授权成功后设置页不刷新**：根因是 `notifySettingsRefresh()` 从未实现，授权状态已写入但设置页收不到通知；新增重渲染钩子（打开注册、关闭解除），授权成功 / 撤回后立即刷新且不跳走当前 tab
 - **同步删除的「系统回收站」选项从未生效**：删除回调误用 `vault.trash(f, false)`（实际进 Obsidian `.trash`），与「Obsidian .trash」选项行为相同；改用 `adapter.trashSystem()`（移动端不支持时自动回退 `.trash`），该选项首次真正生效，顺带清零 `prefer-file-manager-trash-file` lint 警告
 - **同步引擎硬编码配置文件夹 `.obsidian`**：`doActualSyncV3` 的 `configDir` 默认参数写死 `".obsidian"`，而 Obsidian 允许用户自定义配置文件夹名；改为默认引用 `vault.configDir`（唯一调用方本就显式传入真实值，运行时行为不变，默认值对未来的调用方自洽）
+
 
 ## [26.3.0] - 2026-10-31
 
@@ -131,12 +139,14 @@
 - **数据迁移与 normalization 测试**（+9 例）：heatmap / sync 归一化、quickCapture 迁移两分支、注册表不变量（`to` 单调递增且 ≤ 当前数据版本）
 - 全项目 12 文件 125 例通过
 
+
 ## [26.2.4] - 2026-10-28
 
 ### 修复
 - **编辑笔记时光标反复跳回文档顶部**（社区反馈）：lint 内容回写由整文替换改为按「最长公共前缀/后缀」定位的差异区间替换（新增 `src/linter/diff-range.ts`，vitest 4 例覆盖），光标与滚动位于公共区域内时保持原位
 - **编辑触发模式不再刷新 YAML 时间戳**：`date modified` 的维护回归保存时语义——打字间隙刷新既非幂等（时间持续前进）又会反向制造 diff，是跳光标的主要触发源；保存触发（Cmd+S）行为不变
 - **设置页「文件夹规则 / 文件规则」增删后跳回设置页顶部**：改为增量渲染单行（添加只 append、删除只移除该行 DOM），不再整页重渲染，滚动位置与输入焦点得以保留
+
 
 ## [26.2.3] - 2026-10-24
 
@@ -150,6 +160,7 @@
 - **依赖漏洞公告（katex，GHSA-238p-pmpm-9mq7）**：上游 micromark-extension-math 把 katex 声明为运行时依赖（实际只使用其类型声明，katex 代码从未被打包），导致 lockfile 携带公告覆盖的版本。处理：按 MIT 将其语法层 vendor 为 `src/linter/micromark-math.ts`（约 420 行 TS 化，含 `TokenTypeMap` 显式扩充，html 渲染层未随行），卸载整个依赖并把实际引用的三个 micromark util 包提升为显式依赖——katex / @types/katex 从依赖树连根消失（`npm ls` 为空、lockfile 零匹配）；新增 2 例冒烟测试守护 vendor 代码（行内/块级切分 + 未闭合 `$` 不误判），全项目测试 54 → 56 例
 - 顺带清理 eslint.config.mjs 三块失效豁免（默认热键 / i18n 的 `require` / 早已删除的 heatmap 目录）
 
+
 ## [26.2.2] - 2026-10-23
 
 ### 新增
@@ -161,6 +172,7 @@
   - 弹窗 UI：融入式输入行（聚焦/失焦/悬停均无框线，特异性 0-3-0/0-4-0 压过原生 `input[type=text]` 样式）、分隔线伪元素绘制且左右各内缩 16px、空态紧凑（无输入不渲染占位）、不显示建索引进度文字
   - 设置：「搜索」组位于 Astra tab 日历组之后，4 项（Ribbon 按钮 / 显示摘录 / 摘录渲染换行 / 高亮匹配词），默认中文
   - 实现：新增 `src/search/`（tokenizer / search-service / search-modal，纯函数层 vitest 15 例覆盖分词与排序摘录）
+
 
 ## [26.2.1] - 2026-10-23
 
@@ -186,7 +198,6 @@
 
 - **devDependencies 中未使用的 obsidian-dataview**：源码零引用，esbuild external 同步清理。
 
----
 
 ## [26.1.9] - 2026-09-30
 
@@ -202,7 +213,6 @@
   - 修复：`weekdayFormat` 改为纯 `"{wd}"`，让"周"字只由 `dayHeader` 系列模板单一负责
   - 零风险：en.ts 本来就是 `"{wd}"` 没问题；grep 确认该键只在 flomo/panel.ts 4 处使用；不改 JS/CSS，不引入新 bug
 
----
 
 ## [26.1.8] - 2026-09-25
 
@@ -218,6 +228,7 @@
   - `.flomo-submit-btn` 锁定微信风格（空=灰、有输入=蓝、hover 不变）改用提特异性方案：选择器从 `.flomo-submit-btn:hover`（0,1,1）提升到 `body .flomo-input-card .flomo-submit-btn:hover`（0,3,1），空输入灰色规则升至 0,4,1
   - Obsidian 注释中的 `!important` 关键词（L857/L3277）改写措辞，避免 scanner 误报
 - **`.ad-modal-btn--primary` 前景色修复**：`color` 从主题相关的 `--ad-on-accent`（亮黑/暗白）改为 Obsidian 原生 `--text-on-accent`（亮暗主题统一白色），`:hover` 中显式再次声明防止原生覆盖。"取消/保存"组保存按钮在亮色主题下 hover 字体不再变黑色
+
 
 ## [26.1.7] - 2026-09-24
 
@@ -244,7 +255,12 @@
 - **每日英语卡片按钮组视觉间距**：左右箭头 + 骰子三者之间 `gap` 6px → 14px，改善按钮拥挤感
 - **移动端弹窗按钮适配（.ad-modal-btn）** ：移动端按钮圆角对齐 `var(--button-radius)`（Obsidian 移动端触摸胶囊语言），配色仍走 `--ad-s1/--ad-h1` token；布局沿用并排 `row`，不堆叠，保证两胶囊始终同一行
 
+
 ## [26.1.6] - 2026-09-23
+
+### 新增（设计系统）
+
+- **设计系统代号：Astra Pill Item**。核心 token：`ad-r3`（选中/hover 圆角）、`ad-line`（默认边框）、`ad-h1`（hover 背景）、`ad-accent-dim`（active 背景）、accent 30% mix（active 边框）、accent 色文字
 
 ### 修复
 
@@ -259,9 +275,6 @@
 - **Astra Pill Item 应用于快捷链接胶囊**：`.astra-plugin-shortcut` 对齐 Pill Item border/padding/gap/hover/active；保留 5 色 mark 色块；border-radius 12px
 - **嵌入态清除 Project 侧栏强制覆盖**：移除 `.po-board-host.po-board-view .po-sidebar__item:hover/.is-active` 的 `background: transparent` 和硬编码 Obsidian 变量规则
 
-### 新增（设计系统）
-
-- **设计系统代号：Astra Pill Item**。核心 token：`ad-r3`（选中/hover 圆角）、`ad-line`（默认边框）、`ad-h1`（hover 背景）、`ad-accent-dim`（active 背景）、accent 30% mix（active 边框）、accent 色文字
 
 ## [26.1.5] - 2026-09-13
 
@@ -283,15 +296,8 @@
 - **任务编辑弹窗**：标题、表单字段、优先级、状态、类型、日期标签、每日节点星期表头全部 i18n；日期输入框添加 `lang` 属性以适配不同语言环境的日期选择器
 - **确认弹窗**：默认取消 / 确定按钮、删除项目 / 任务正文补齐 i18n；confirm-modal 独立抽出可复用
 
+
 ## [26.1.4] - 2026-09-12
-
-### 修复
-
-- **快速捕获（Flomo）编辑工具栏重排**
-  - 桌面端：时间输入框独立成行与取消/发送居右对齐，间距 8px
-  - 移动端（<680px）：取消/发送回到工具行，时间输入框占满整行
-  - 时间输入框圆角统一 6px
-- Linter 组「忽略文件夹」→「忽略文件/文件夹」，说明文案更新
 
 ### 新增
 
@@ -303,20 +309,27 @@
   - 英文模块标题（Task Progress / Project Status / Daily Phrase）统一标题大小写
   - frontmatter 字段（`状态: 待办` / `优先级: 高`）保持中文不翻译；农历日期双语均显示中文，标签在英文下为 `Lunar`
 
+### 修复
+
+- **快速捕获（Flomo）编辑工具栏重排**
+  - 桌面端：时间输入框独立成行与取消/发送居右对齐，间距 8px
+  - 移动端（<680px）：取消/发送回到工具行，时间输入框占满整行
+  - 时间输入框圆角统一 6px
+- Linter 组「忽略文件夹」→「忽略文件/文件夹」，说明文案更新
+
+
 ## [26.1.2] - 2026-09-06
 
 ### 修复
 
 - 主页模块拖拽排序时出现向下偏移超过一个模块的高度的错位：根因是 CSS 优先级冲突——`.astra-modules-grid .astra-surface`（`position: relative`，特异性 `0,2,0`）覆盖了 `.astra-card--dragging`（`position: absolute`，特异性 `0,1,0`），导致被拖卡片未能真正脱流，占位符插入后 dense 网格重排又将其挤下一行，叠加相对偏移形成大幅错位。修复：起手时用内联样式 `card.style.position = "absolute"` 强制脱流（内联优先级最高，无法被样式表覆盖）。
 
+
 ## [26.1.1] - 2026-09-04
 
 ### 破坏性变更：插件 ID 变更
 
 - 插件 ID `attention` → **`astral-trek`**；视图类型改为 `astra-dashboard-view`。升级后需重新放置插件目录、旧 `data.json` 需手动拷贝到新目录（ID 变更后默认丢失）
-
-### 更名与品牌统一
-
 - 代码品牌词 `attend` → `astra`（类名、常量、CSS 类/变量），`ad-*` 缩写保持不变
 - 用户可见名称统一为 **Astra**：`manifest.json` 的 `name`、Ribbon 标签、设置分区标题
 - npm 包名、仓库地址、`versions.json` minAppVersion 统一回填为 1.11.0
