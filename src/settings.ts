@@ -1355,6 +1355,7 @@ function renderSyncSettings(
 
   // 同步配置文件夹（开 → 二次确认）
   whatGroup.addSetting((setting) => {
+    let pendingConfirm = false;
     setting
       .setName($t("settings_configdir"))
       .setDesc(
@@ -1364,19 +1365,25 @@ function renderSyncSettings(
       )
       .addToggle((toggle) =>
         toggle.setValue(s.syncConfigDir).onChange((value) => {
-          if (value && !s.syncConfigDir) {
+          if (value && !s.syncConfigDir && !pendingConfirm) {
+            pendingConfirm = true;
             toggle.setValue(false);
             new SyncConfigDirConfirmModal(plugin.app, async () => {
               s.syncConfigDir = true;
               await plugin.saveSettings();
+              pendingConfirm = false;
               toggle.setValue(true);
             }).open();
             return;
           }
-          void (async () => {
-            s.syncConfigDir = false;
-            await plugin.saveSettings();
-          })();
+          // 只处理用户主动关闭；二次确认后的 re-entrant 回调
+          // （value=true，s.syncConfigDir 已 true）在此什么都不做
+          if (!value) {
+            void (async () => {
+              s.syncConfigDir = false;
+              await plugin.saveSettings();
+            })();
+          }
         })
       );
   });

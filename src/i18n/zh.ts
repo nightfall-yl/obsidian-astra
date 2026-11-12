@@ -1067,7 +1067,7 @@ export default {
   "settings_sync_bookmarks_desc": "是否同步 Obsidian 的书签数据（bookmarks.json）。",
   "settings_syncunderscore": "同步 _ 文件或文件夹",
   "settings_syncunderscore_desc": "是否同步\"_\"（下划线）开始的文件或文件夹。",
-  "settings_configdir": "同步配置文件夹（实验性质）",
+  "settings_configdir": "同步配置文件夹",
   "settings_configdir_desc": "是否同步 Obsidian 的配置文件夹 {configDir}（其中的 .git 和 node_modules 依然会被忽略）。请注意，此设置可能会影响到您 Obsidian 或者所有的插件设置，也可能需要您同步完毕后重启 Obsidian。如果您同意自行承受其风险，则可以开启本设置。",
 
   "settings_skiplargefiles": "跳过大文件",

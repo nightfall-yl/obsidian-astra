@@ -26,6 +26,10 @@ describe("isRemoteItemNotFoundError", () => {
     expect(isRemoteItemNotFoundError(apiError(404))).toBe(true);
   });
 
+  it("classifies HTTP 410 (soft-delete / retention) as remote-deleted", () => {
+    expect(isRemoteItemNotFoundError(apiError(410))).toBe(true);
+  });
+
   it("classifies a bare itemNotFound code as remote-deleted", () => {
     const err = new Error("itemNotFound") as Error & { code?: string };
     err.code = "itemNotFound";

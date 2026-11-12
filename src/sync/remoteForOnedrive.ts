@@ -643,9 +643,9 @@ export const isHttpSuccessStatus = (status: number): boolean => {
   return status >= 200 && status < 300;
 };
 
-/** 404 means the addressed remote item no longer exists. */
+/** 404 or 410 means the addressed remote item no longer exists. */
 export const isHttpNotFoundStatus = (status: number): boolean => {
-  return status === 404;
+  return status === 404 || status === 410;
 };
 
 /**

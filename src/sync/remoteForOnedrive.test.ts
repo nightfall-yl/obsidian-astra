@@ -49,10 +49,10 @@ describe("isHttpSuccessStatus / isHttpNotFoundStatus", () => {
     expect(isHttpSuccessStatus(500)).toBe(false);
   });
 
-  it("only 404 counts as not-found", () => {
+  it("404 and 410 count as not-found", () => {
     expect(isHttpNotFoundStatus(404)).toBe(true);
+    expect(isHttpNotFoundStatus(410)).toBe(true);
     expect(isHttpNotFoundStatus(403)).toBe(false);
-    expect(isHttpNotFoundStatus(410)).toBe(false);
     expect(isHttpNotFoundStatus(429)).toBe(false);
     expect(isHttpNotFoundStatus(500)).toBe(false);
   });

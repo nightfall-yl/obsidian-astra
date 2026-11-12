@@ -1066,7 +1066,7 @@ export default {
   "settings_sync_bookmarks_desc": "Whether to sync Obsidian's bookmark data (bookmarks.json).",
   "settings_syncunderscore": "Sync _ Files Or Folders",
   "settings_syncunderscore_desc": "Sync files or folders starting with _ (\"underscore\") or not",
-  "settings_configdir": "Sync Config Dir (experimental)",
+  "settings_configdir": "Sync Config Dir",
   "settings_configdir_desc": "Sync config dir {configDir} or not (inner folder .git and node_modules would be ignored). Please be aware that this may impact all your plugins' or Obsidian's settings, and may require you restart Obsidian after sync. Enable this at your own risk.",
   "settings_skiplargefiles": "Skip Large Files",
   "settings_skiplargefiles_desc": "Skip files with sizes larger than the threshold. Here 1 MB = 10^6 bytes.",

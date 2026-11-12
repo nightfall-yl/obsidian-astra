@@ -9,12 +9,10 @@ import * as onedrive from "./remoteForOnedrive";
 
 /**
  * True only when the error is positive evidence that the remote item no longer
- * exists: HTTP 404 or Graph code "itemNotFound".
+ * exists: HTTP 404, HTTP 410, or Graph code "itemNotFound".
  *
- * Everything else — auth failures (401/403), throttling (429), server errors
- * (5xx), network failures with no response — must NOT be treated as deletion.
- * The API layer attaches `status` to thrown errors; reading those properties
- * keeps this predicate independent of the human-readable message.
+ * OneDrive 410 是软删除（回收站）或租户 retention 策略触发，语义同物理删除；
+ * 与 404 一并归类为「远端已不存在」，使 syncEngine 能安全摘除快照键、跳过条目。
  */
 export const isRemoteItemNotFoundError = (err: unknown): boolean => {
   if (err === null || typeof err !== "object") {
@@ -24,8 +22,8 @@ export const isRemoteItemNotFoundError = (err: unknown): boolean => {
   const status = typeof e.status === "number" ? e.status : undefined;
   const code = typeof e.code === "string" ? e.code : undefined;
   if (status !== undefined) {
-    // Any HTTP status present is authoritative: only 404 means "gone".
-    return status === 404;
+    // Any HTTP status present is authoritative: 404 or 410 means "gone".
+    return status === 404 || status === 410;
   }
   return code === "itemNotFound";
 };
