@@ -1030,23 +1030,23 @@ class SyncPasswordModal extends Modal {
 class SyncConfigDirConfirmModal extends Modal {
   constructor(
     app: App,
-    private readonly onConfirm: () => Promise<void>
+    private readonly onConfirm: () => Promise<void>,
+    private readonly onCancel?: () => void
   ) {
     super(app);
   }
 
   onOpen(): void {
     const { contentEl } = this;
-    contentEl.createEl("h3", {
-      text: $t("settings_configdir"),
-    });
-    for (const key of ["modal_syncconfig_attn", "modal_syncconfig_secondconfirm"]) {
-      contentEl.createEl("p", { text: $t(key) });
-    }
+    contentEl.createEl("h3", { text: $t("modal_syncconfig_title") });
+    const listEl = contentEl.createEl("ul", { cls: "modal-spaced-list" });
+    listEl.createEl("li", { text: $t("modal_syncconfig_attn1") });
+    listEl.createEl("li", { text: $t("modal_syncconfig_attn2") });
+    listEl.createEl("li", { text: $t("modal_syncconfig_attn3") });
     new Setting(contentEl)
       .addButton((b) =>
         b
-          .setButtonText($t("modal_syncconfig_notice"))
+          .setButtonText($t("modal_syncconfig_secondconfirm"))
           .setWarning()
           .onClick(() => {
             void (async () => {
@@ -1062,6 +1062,9 @@ class SyncConfigDirConfirmModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
+    // 无论用户点取消、ESC 还是右上角 X，都算取消。
+    // confirm 路径里已经把 pendingConfirm 重置了，这里再设一次也无害。
+    this.onCancel?.();
   }
 }
 
@@ -1368,12 +1371,21 @@ function renderSyncSettings(
           if (value && !s.syncConfigDir && !pendingConfirm) {
             pendingConfirm = true;
             toggle.setValue(false);
-            new SyncConfigDirConfirmModal(plugin.app, async () => {
-              s.syncConfigDir = true;
-              await plugin.saveSettings();
-              pendingConfirm = false;
-              toggle.setValue(true);
-            }).open();
+            new SyncConfigDirConfirmModal(
+              plugin.app,
+              async () => {
+                s.syncConfigDir = true;
+                await plugin.saveSettings();
+                pendingConfirm = false;
+                toggle.setValue(true);
+              },
+              () => {
+                // 用户取消（或关 Modal） → 重置 guard，下次打开还会弹
+                pendingConfirm = false;
+                // 确保 toggle UI 和数据状态对齐
+                toggle.setValue(false);
+              }
+            ).open();
             return;
           }
           // 只处理用户主动关闭；二次确认后的 re-entrant 回调

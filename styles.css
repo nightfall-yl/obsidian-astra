@@ -4636,3 +4636,8 @@ body.theme-light .ad-task-modal .ad-node-cell.is-skip-overdue { border-color: #9
 .device-code-status-failed {
   color: var(--color-red);
 }
+
+/* 确认 Modal 里要点列表项之间留间距 */
+.modal-spaced-list > li {
+  margin: 0.5em 0;
+}
