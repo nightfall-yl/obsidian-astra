@@ -311,3 +311,7 @@ export const statFix = async (
     size: size,
   };
 };
+
+/** 简单 sleep 工具（取代 util.promisify(setTimeout)） */
+export const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));

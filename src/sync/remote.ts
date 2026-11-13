@@ -6,6 +6,8 @@ import type { Vault } from "obsidian";
 
 import type { OnedriveConfig } from "./baseTypes";
 import * as onedrive from "./remoteForOnedrive";
+import type { TokenStorage } from "./onedrive/auth/tokenStorage";
+import type { DeviceCodeFlowClient } from "./onedrive/auth/deviceCodeFlow";
 
 /**
  * True only when the error is positive evidence that the remote item no longer
@@ -35,27 +37,27 @@ export class RemoteClient {
 
   constructor(
     serviceType: "onedrive",
-    onedriveConfig?: OnedriveConfig,
-    vaultName?: string,
-    saveUpdatedConfigFunc?: () => Promise<void>
+    onedriveConfig: OnedriveConfig | undefined,
+    vaultName: string | undefined,
+    tokenStorage: TokenStorage,
+    flowClient: DeviceCodeFlowClient,
+    saveSettingsCb?: () => Promise<void>
   ) {
     if (serviceType !== "onedrive") {
       throw Error(`not supported service type ${String(serviceType)}`);
     }
-    this.serviceType = serviceType;
-    // the client may modify the config inplace,
-    // so we use a ref not a copy of config here
-    if (vaultName === undefined || saveUpdatedConfigFunc === undefined) {
-      throw Error(
-        "remember to provide vault name and callback while init onedrive client"
-      );
+    if (!vaultName) {
+      throw Error("remember to provide vault name while init onedrive client");
     }
+    this.serviceType = serviceType;
     const remoteBaseDir = onedriveConfig?.remoteBaseDir || vaultName;
     this.onedriveConfig = onedriveConfig;
     this.onedriveClient = onedrive.getOnedriveClient(
       onedriveConfig ?? onedrive.DEFAULT_ONEDRIVE_CONFIG,
       remoteBaseDir,
-      saveUpdatedConfigFunc
+      tokenStorage,
+      flowClient,
+      saveSettingsCb
     );
   }
 

@@ -1,8 +1,8 @@
 {
   "id": "astral-trek",
   "name": "Astra",
-  "version": "26.3.7",
-  "minAppVersion": "1.11.0",
+  "version": "26.3.8",
+  "minAppVersion": "1.11.4",
   "description": "All-in-one workspace: dashboard, vault search, OneDrive sync and markdown enhancements.",
   "author": "nightfall",
   "isDesktopOnly": false

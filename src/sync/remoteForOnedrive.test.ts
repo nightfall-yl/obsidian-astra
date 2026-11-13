@@ -378,7 +378,8 @@ describe("oneDriveApiRequest: bare non-2xx responses", () => {
     expect(err?.code).toBeUndefined();
     expect(err?.message).toContain("(HTTP 502)");
     expect(err?.message).toContain("Bad Gateway");
-    expect(err?.message).toContain("RAW BODY: <html>");
+    const cause = (err as Error & { cause?: { rawBody?: string } }).cause;
+    expect(cause?.rawBody).toContain("<html>");
     // Not a deletion: auth/throttling/server failures keep counting.
     expect(isRemoteItemNotFoundError(err)).toBe(false);
   });
@@ -469,7 +470,8 @@ describe("oneDriveApiRequest: lazy resp.json getter must never swallow status", 
     expect(err?.constructor).toBe(Error);
     expect(err?.status).toBe(502);
     expect(err?.code).toBeUndefined();
-    expect(err?.message).toContain("RAW BODY: <html>");
+    const cause = (err as Error & { cause?: { rawBody?: string } }).cause;
+    expect(cause?.rawBody).toContain("<html>");
     expect(isRemoteItemNotFoundError(err)).toBe(false);
   });
 

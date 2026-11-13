@@ -1,9 +1,12 @@
 /**
- * astral-trek side wiring for the vendored OneDrive sync engine
+ * astra side wiring for the vendored OneDrive sync engine
  *
  * Owns: settings access, the internal DB + vaultRandomID lifecycle, the
  * remote client, vault delete/rename history recording, auto-sync timers,
- * the OAuth callback protocol handler and sync status notifications.
+ * the Device Code Flow auth orchestration, and sync status notifications.
+ *
+ * OAuth 鉴权不再依赖 obsidian:// URL scheme —— 改用 Device Code Flow
+ *（RFC 8628），一条代码路径通吃桌面/iOS/Android。
  */
 
 import type {
@@ -19,7 +22,6 @@ import {
   normalizePath,
   setIcon,
 } from "obsidian";
-
 import type AstraDashboardPlugin from "../main";
 import { t as $t } from "../i18n";
 import type {
@@ -27,11 +29,10 @@ import type {
   SyncDirectionType,
   SyncTriggerSourceType,
 } from "./baseTypes";
-import { COMMAND_CALLBACK_ONEDRIVE, applyRemoteSnapshotMigration } from "./baseTypes";
+import { applyRemoteSnapshotMigration } from "./baseTypes";
 import {
-  getAuthUrlAndVerifier,
-  sendAuthReq,
-  setConfigBySuccessfullAuthInplace,
+	buildDeviceCodeFlowClient,
+	humanizeApiError,
 } from "./remoteForOnedrive";
 import { RemoteClient } from "./remote";
 import {
@@ -47,6 +48,8 @@ import {
   prepareDBs,
 } from "./localdb";
 import { listFilesInObsFolder } from "./obsFolderLister";
+import { TokenStorage } from "./onedrive/auth/tokenStorage";
+import type { DeviceCodeResponse } from "./onedrive/auth/deviceCodeFlow";
 import {
   isPasswordOk,
   getRemoteStates,
@@ -114,56 +117,104 @@ export interface SyncStatusInfo {
   lastError?: string;
 }
 
-/** 授权过程中保存在内存里的 PKCE verifier（不落盘） */
-interface OAuth2Info {
-  verifier: string;
-  helperModal: OneDriveAuthHelperModal | null;
-}
+/** Device Code Flow 授权 Modal —— 展示 user_code + verification_uri + 轮询状态 */
+class DeviceCodeAuthModal extends Modal {
+	private statusEl: HTMLElement | null = null;
+	private retryBtnEl: HTMLElement | null = null;
 
-class OneDriveAuthHelperModal extends Modal {
-  constructor(
-    app: App,
-    private readonly authUrl: string,
-    private readonly onFinished: () => void
-  ) {
-    super(app);
-  }
+	constructor(
+		app: App,
+		private readonly deviceCodeResp: DeviceCodeResponse,
+		private readonly onDone: () => void,
+		private readonly onRetry: () => void
+	) {
+		super(app);
+	}
 
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.createEl("p", { text: $t("sync.auth.waitingHint") });
-    contentEl.createEl("p", {
-      cls: "setting-item-description",
-      text: $t("sync.auth.openManualHint"),
-    });
-    contentEl.createEl("p").createEl("a", {
-      href: this.authUrl,
-      text: this.authUrl,
-    });
-    new Setting(contentEl).addButton((btn) =>
-      btn
-        .setButtonText($t("sync.auth.copyLink"))
-        .onClick(() => {
-          void (async () => {
-            try {
-              await navigator.clipboard.writeText(this.authUrl);
-              new Notice($t("sync.auth.copyLinkNotice"));
-            } catch {
-              // 剪贴板不可用时保持链接可手动长按复制，不抛错
-            }
-          })();
-        })
-    );
-  }
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createEl("h2", { text: $t("sync.auth.deviceCodeTitle") });
+		contentEl.createEl("p", { text: $t("sync.auth.deviceCodeHint") });
 
-  onClose(): void {
-    this.contentEl.empty();
-  }
+		// 设备码：使用 styles.css 里的 .device-code-wrap 样式
+		const codeWrap = contentEl.createDiv({ cls: "device-code-wrap" });
+		codeWrap.textContent = this.deviceCodeResp.user_code;
 
-  finish(): void {
-    this.close();
-    this.onFinished();
-  }
+		contentEl.createEl("p", { text: $t("sync.auth.openDeviceCodeUrlHint") });
+		contentEl.createEl("p").createEl("a", {
+			href: this.deviceCodeResp.verification_uri,
+			text: this.deviceCodeResp.verification_uri,
+		});
+
+		new Setting(contentEl)
+			.addButton((btn) =>
+				btn
+					.setButtonText($t("sync.auth.copyLink"))
+					.onClick(() => {
+						void navigator.clipboard
+							.writeText(this.deviceCodeResp.verification_uri)
+							.then(() => new Notice($t("sync.auth.copyLinkNotice")))
+							.catch(() => { /* no-op */ });
+					})
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText($t("sync.auth.copyUserCode"))
+					.onClick(() => {
+						void navigator.clipboard
+							.writeText(this.deviceCodeResp.user_code)
+							.then(() => new Notice($t("sync.auth.copyUserCodeNotice")))
+							.catch(() => { /* no-op */ });
+					})
+			);
+
+		// 轮询状态（初始：等待中）
+		this.statusEl = contentEl.createEl("p", {
+			cls: "device-code-status",
+			text: $t("sync.auth.pollingWaiting"),
+		});
+
+		// 重新授权按钮（初始隐藏，失败/过期时显示）
+		this.retryBtnEl = contentEl.createEl("p", { cls: "device-code-retry" });
+		const btn = this.retryBtnEl.createEl("button", {
+			type: "button",
+			cls: "mod-cta",
+			text: $t("sync.auth.retryButton"),
+		});
+		btn.addEventListener("click", () => this.onRetry());
+		this.retryBtnEl.hide();
+
+		// 桌面端自动打开浏览器
+		if (!Platform.isMobileApp) {
+			window.open(this.deviceCodeResp.verification_uri);
+		}
+	}
+
+	/** 成功状态 —— 绿字 + 稍后自动关闭 */
+	markSuccess(): void {
+		if (!this.statusEl) return;
+		this.statusEl.setText($t("sync.auth.pollingSuccess"));
+		this.statusEl.addClass("device-code-status-success");
+		this.statusEl.removeClass("device-code-status-failed");
+		if (this.retryBtnEl) this.retryBtnEl.hide();
+	}
+
+	/** 失败状态 —— 红字展示错误 + 显示重试按钮，Modal 保持打开 */
+	markFailed(errorMsg: string): void {
+		if (!this.statusEl) return;
+		this.statusEl.setText(errorMsg);
+		this.statusEl.addClass("device-code-status-failed");
+		this.statusEl.removeClass("device-code-status-success");
+		if (this.retryBtnEl) this.retryBtnEl.show();
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		this.statusEl = null;
+		this.retryBtnEl = null;
+		this.onDone();
+	}
 }
 
 export class SyncManager {
@@ -172,7 +223,11 @@ export class SyncManager {
   private vaultRandomID = "";
   private client: RemoteClient | null = null;
   private syncing = false;
-  private oauth2Info: OAuth2Info | null = null;
+
+  /** Device Code Flow token 存储（Obsidian SecretStorage） */
+  private tokenStorage: TokenStorage = new TokenStorage();
+  /** 当前 RemoteClient 对应的 (clientID, authority) 指纹 —— 用来检测是否需要重建 */
+  private clientFingerprint = "";
 
   private statusListeners = new Set<(info: SyncStatusInfo) => void>();
   private currentStatus: SyncStatusInfo = { status: "idle" };
@@ -183,6 +238,8 @@ export class SyncManager {
   private statusBarItemEl: HTMLElement | null = null;
 
   private vaultEventRefs: EventRef[] = [];
+  /** 进行中的 Device Code Flow 授权 Modal（用于 cancelPolling） */
+  private activeAuthModal: DeviceCodeAuthModal | null = null;
 
   constructor(plugin: AstraDashboardPlugin) {
     this.plugin = plugin;
@@ -198,14 +255,6 @@ export class SyncManager {
   async onload(): Promise<void> {
     setSyncDebugEnabled(this.plugin.data.settings.sync.debug ?? false);
 
-    // OAuth 回调：始终注册（未启用时也允许完成一次授权流程）
-    this.plugin.registerObsidianProtocolHandler(
-      COMMAND_CALLBACK_ONEDRIVE,
-      (data) => {
-        void this.handleOAuthCallback(data.code ?? "", data.state ?? "");
-      }
-    );
-
     try {
       const r = await prepareDBs(this.plugin.app.vault.getName(), "");
       this.db = r.db;
@@ -215,8 +264,22 @@ export class SyncManager {
     }
 
     // ── 一次性迁移：remoteSnapshot 从 data.json 搬到 IndexedDB ──
-    // 标记位保证只跑一次；已迁移用户的数据不再含 remoteSnapshot。
     await this.migrateRemoteSnapshotToIDB();
+
+    // ── Device Code Flow 时代：初始化 TokenStorage ──
+    // SecretStorage 优先；为空则从 data.json 的旧字段迁入并清空。
+    await this.tokenStorage.initialize(
+      this.plugin.app,
+      this.plugin.data.settings.sync.onedriveConfig,
+      async () => {
+        const cfg = this.plugin.data.settings.sync.onedriveConfig;
+        cfg.accessToken = "";
+        cfg.refreshToken = "";
+        cfg.accessTokenExpiresAtTime = 0;
+        cfg.accessTokenExpiresInSeconds = 0;
+        await this.plugin.saveSettings();
+      }
+    );
 
     this.applyEnabled();
 
@@ -232,8 +295,8 @@ export class SyncManager {
     this.autoScheduler.stop();
     this.clearTimers();
     this.unregisterVaultEvents();
-    this.oauth2Info?.helperModal?.close();
-    this.oauth2Info = null;
+    this.activeAuthModal?.close();
+    this.activeAuthModal = null;
     this.removeStatusBarItem();
   }
 
@@ -458,85 +521,101 @@ export class SyncManager {
   // ─────────────────────────── auth ───────────────────────────
 
   get isAuthorized(): boolean {
-    const cfg = this.plugin.data.settings.sync.onedriveConfig;
-    return cfg.refreshToken !== "" && cfg.clientID !== "";
+    return this.tokenStorage.hasTokens();
   }
 
+  /**
+   * Device Code Flow 鉴权：
+   * ① 向 Microsoft 请求设备码
+   * ② 展示 user_code + verification_uri Modal
+   * ③ 用户在浏览器完成授权
+   * ④ 插件后台轮询 /token 拿到 token
+   * ⑤ 写入 TokenStorage（SecretStorage）
+   * ⑥ 拉取 username → 完成
+   */
   async startAuth(): Promise<void> {
-    const s = this.plugin.data.settings.sync;
-    const clientID = s.onedriveConfig.clientID.trim();
-    if (clientID === "") {
-      new Notice($t("sync.auth.needClientId"));
-      return;
-    }
-    const { authUrl, verifier } = await getAuthUrlAndVerifier(
-      clientID,
-      s.onedriveConfig.authority
-    );
-    const helperModal = new OneDriveAuthHelperModal(
-      this.plugin.app,
-      authUrl,
-      () => {
-        this.oauth2Info = null;
-      }
-    );
-    // 必须先渲染 Modal：移动端没有自动跳转，链接与复制按钮是唯一入口
-    helperModal.open();
-    this.oauth2Info = { verifier, helperModal };
-    // 桌面端（Electron）才尝试自动打开系统浏览器；iOS WKWebView 下 window.open
-    // 通常返回 null 且无可见行为，因此移动端直接跳过，由 Modal 内链接手动打开
-    if (!Platform.isMobileApp) {
-      window.open(authUrl);
-    }
-  }
+    const cfg = this.plugin.data.settings.sync.onedriveConfig;
+    const flowClient = buildDeviceCodeFlowClient(cfg);
 
-  private async handleOAuthCallback(
-    code: string,
-    _state: string
-  ): Promise<void> {
-    if (this.oauth2Info === null || code === "") {
-      new Notice($t("sync.auth.callbackNoVerifier"));
+    let deviceCodeResp: DeviceCodeResponse;
+    try {
+      deviceCodeResp = await flowClient.requestDeviceCode();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      syncLog.error("startAuth: requestDeviceCode failed", err);
+      new Notice($t("sync.auth.failed", { msg }));
       return;
     }
-    const s = this.plugin.data.settings.sync;
-    const clientID = s.onedriveConfig.clientID.trim();
-    try {
-      const authRes = await sendAuthReq(
-        clientID,
-        s.onedriveConfig.authority,
-        code,
-        this.oauth2Info.verifier
-      );
-      if ("error" in authRes) {
-        throw new Error(authRes.error_description ?? authRes.error);
+
+    const modal = new DeviceCodeAuthModal(
+      this.plugin.app,
+      deviceCodeResp,
+      () => {
+        if (this.activeAuthModal === modal) this.activeAuthModal = null;
+      },
+      () => {
+        // 用户点"重新授权" —— 关旧 Modal → 开新一轮
+        modal.close();
+        void this.startAuth();
       }
-      await setConfigBySuccessfullAuthInplace(
-        s.onedriveConfig,
-        authRes,
-        () => this.plugin.saveSettings()
-      );
-      // 拉取用户名用于展示
+    );
+    this.activeAuthModal = modal;
+    modal.open();
+
+    // 轮询：在另一个 async 上下文里跑（不阻塞 startAuth 返回）
+    void (async () => {
+      let pollSucceeded = false;
       try {
-        const client = this.getClient();
-        s.onedriveConfig.username = await client.getUser();
-        await this.plugin.saveSettings();
+        const tokenResp = await flowClient.pollForToken(
+          deviceCodeResp.device_code,
+          deviceCodeResp.interval,
+          deviceCodeResp.expires_in
+        );
+
+        // 拿到 token → 存 SecretStorage
+        this.tokenStorage.setTokens(
+          tokenResp.access_token,
+          tokenResp.refresh_token ?? "",
+          tokenResp.expires_in
+        );
+
+        // 拉取用户名
+        try {
+          const client = this.getClient();
+          cfg.username = await client.getUser();
+          await this.plugin.saveSettings();
+        } catch (err) {
+          syncLog.warn("getUser failed after auth", err);
+        }
+
+        pollSucceeded = true;
+        modal.markSuccess();
+        new Notice($t("sync.auth.success"));
+        // 成功 → 等 1.5s 展示绿色成功态后自动关闭
+        window.setTimeout(() => {
+          modal.close();
+          if (this.activeAuthModal === modal) this.activeAuthModal = null;
+        }, 1500);
       } catch (err) {
-        syncLog.warn("getUser failed after auth", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        syncLog.error("startAuth: device code flow failed", err);
+        // 失败 → Modal 保持打开，展示错误 + 重试按钮
+        modal.markFailed($t("sync.auth.pollingFailedPrefix") + msg);
+      } finally {
+        if (pollSucceeded) {
+          this.client = null;
+          this.clientFingerprint = "";
+        }
+        this.notifySettingsRefresh();
       }
-      new Notice($t("sync.auth.success"));
-    } catch (err) {
-      syncLog.error("auth callback failed", err);
-      new Notice(
-        $t("sync.auth.failed", { msg: err instanceof Error ? err.message : String(err) })
-      );
-    } finally {
-      this.oauth2Info?.helperModal?.finish();
-      this.oauth2Info = null;
-      this.notifySettingsRefresh();
-    }
+    })();
   }
 
   async revokeAuth(): Promise<void> {
+    // SecretStorage 清空
+    this.tokenStorage.clearTokens();
+
+    // data.json 里敏感字段也一并清空（旧逻辑保留）
     const s = this.plugin.data.settings.sync;
     s.onedriveConfig.accessToken = "";
     s.onedriveConfig.refreshToken = "";
@@ -555,6 +634,7 @@ export class SyncManager {
       syncLog.error("revokeAuth: failed to clear remote snapshot", err);
     }
     this.client = null;
+    this.clientFingerprint = "";
     new Notice($t("sync.auth.revoked"));
     this.updateStatusBar();
     this.notifySettingsRefresh();
@@ -563,22 +643,16 @@ export class SyncManager {
   /** 设置页「检查可否连接」：读取 OneDrive 账户信息验证授权与网络。 */
   async checkConnection(): Promise<void> {
     new Notice($t("sync.action.checkConnChecking"));
-    const errors = { msg: "" };
+    let errMessage = "";
     const res = await this.getClient().checkConnectivity((err) => {
-      if (err instanceof Error) {
-        errors.msg = err.message;
-      } else if (typeof err === "string") {
-        errors.msg = err;
-      } else if (err !== undefined) {
-        errors.msg = JSON.stringify(err);
-      }
+      errMessage = humanizeApiError(err);
     });
     if (res) {
       new Notice($t("sync.action.checkConnSucc"));
     } else {
       new Notice($t("sync.action.checkConnFail"));
-      if (errors.msg !== "") {
-        new Notice(errors.msg);
+      if (errMessage !== "") {
+        new Notice(errMessage);
       }
     }
   }
@@ -634,13 +708,22 @@ export class SyncManager {
 
   private getClient(): RemoteClient {
     const s = this.plugin.data.settings.sync;
+    const fingerprint = `${s.onedriveConfig.clientID}|${s.onedriveConfig.authority}`;
+    // clientID / authority 变了 → RemoteClient 里持有旧 flowClient，必须重建
+    if (this.client !== null && this.clientFingerprint !== fingerprint) {
+      this.client = null;
+    }
     if (this.client === null) {
+      const flowClient = buildDeviceCodeFlowClient(s.onedriveConfig);
       this.client = new RemoteClient(
         "onedrive",
         s.onedriveConfig,
         this.plugin.app.vault.getName(),
+        this.tokenStorage,
+        flowClient,
         () => this.plugin.saveSettings()
       );
+      this.clientFingerprint = fingerprint;
     }
     return this.client;
   }
@@ -829,7 +912,7 @@ export class SyncManager {
       }
     } catch (err) {
       syncLog.error("sync run failed", err);
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = humanizeApiError(err) || (err instanceof Error ? err.message : String(err));
       this.currentStatus = {
         ...this.currentStatus,
         status: "idle",

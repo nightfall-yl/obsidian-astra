@@ -5,6 +5,24 @@
 > 说明：本更新日志自 `26.1.1` 起维护。
 
 
+## [26.3.8] - 2026-11-13
+
+### 新增
+- **OneDrive 鉴权切换为 OAuth 2.0 Device Code Flow（RFC 8628）**：不再依赖 `obsidian://` 自定义 URL scheme，桌面 / iOS / Android 一条代码路径通吃；用户在浏览器输入设备码完成授权，插件后台轮询拿 token
+- **Token 存储升级为 Obsidian SecretStorage**：桌面端走系统钥匙串（macOS Keychain / Windows Credential Manager），移动端走平台安全存储；旧版 data.json 里的 token 首次加载时自动迁入 SecretStorage 并清空原字段，幂等
+- **Device Code Flow 专用 Modal**：弹窗展示设备码 + 授权链接 + 复制按钮 + 轮询状态；授权失败时 Modal 保持打开、红字展示错误原因 + 「重新授权」按钮；成功后绿字展示 1.5s 自动关闭，不再一闪而过
+- **Entra ID (Azure AD) AADSTS 错误码友好映射**：6 种常见企业账号 / 租户策略错误直接转译中文，不再抛原始 JSON
+- **refresh 单飞锁**：并发 Graph 调用触发的 refresh 自动串行化，避免 refresh token 被并发请求互废
+
+### 修复
+- **RemoteClient 在 clientID / authority 变更后不重建**：此前 `getClient()` 只在 null 时创建，用户改 clientID 后 refresh 仍走旧 flowClient；现加 `(clientID|authority)` 指纹比对，不一致自动销毁重建
+- **TokenStorage.hasTokens 与 setTokens 语义不一致**：`hasTokens` 强制要求 refreshToken 非空，但 `setTokens` 允许空串写入；access_token 在有效期内却因 refreshToken 丢失被误判为「未鉴权」；现只要求 accessToken 存在
+
+### 调整
+- **sleep 工具抽为共享函数**：从 deviceCodeFlow.ts 移到 misc.ts，同文件多处复用一份实现
+- **移除冗余的 clientID 空值校验**：models.ts normalize 阶段统一兜底，startAuth 里重复检查删除
+
+
 ## [26.3.7] - 2026-11-12
 
 ### 修复

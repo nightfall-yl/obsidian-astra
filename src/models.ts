@@ -627,17 +627,14 @@ export function normalizeSyncSettings(
     savedDirection === "incremental_pull_and_delete_only"
       ? savedDirection
       : "bidirectional";
-  // 旧版本默认 clientID 为空且已被持久化；空值无法授权，
-  // 回填新默认（用户自定义的非空值不受影响）
-  const savedClientID = saved?.onedriveConfig?.clientID;
   merged.onedriveConfig = {
     ...DEFAULT_SYNC_SETTINGS.onedriveConfig,
     ...(saved?.onedriveConfig ?? {}),
-    clientID:
-      savedClientID !== "" && savedClientID !== undefined
-        ? savedClientID
-        : DEFAULT_SYNC_SETTINGS.onedriveConfig.clientID
   };
+  // 旧版本可能持久化了空 clientID —— 覆盖掉默认值；这里兜底回填
+  if (!merged.onedriveConfig.clientID?.trim()) {
+    merged.onedriveConfig.clientID = DEFAULT_SYNC_SETTINGS.onedriveConfig.clientID;
+  }
   // 数值/字段语义与上游对齐的旧数据迁移
   merged.deleteToWhere = saved?.deleteToWhere ?? "system_trash";
   merged.skipSizeLargerThan =
